@@ -9,7 +9,7 @@ use oauth2::reqwest::async_http_client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
-use crate::{config::AppConfig, db::DbPool, models::{User, NewUser, OauthProvider}, schema::users, security::{create_jwt, hash_password}};
+use crate::{config::AppConfig, db::DbPool, models::{User, NewUser, OauthProvider, UserIdentity, NewUserIdentity}, schema::users, security::{create_jwt, hash_password}};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -212,36 +212,74 @@ pub async fn oauth_callback(State(state): State<AppState>, Query(query): Query<O
     };
 
     use crate::schema::users::dsl::*;
+    use crate::schema::user_identities::dsl as ids_dsl;
 
-    let existing = users
-        .filter(oauth_provider.eq(&provider.key))
-        .filter(oauth_subject.eq(&subject))
-        .first::<User>(&mut conn)
+    // 1) Try to find existing identity
+    let existing_identity = ids_dsl::user_identities
+        .filter(ids_dsl::provider_key.eq(&provider.key))
+        .filter(ids_dsl::subject.eq(&subject))
+        .first::<UserIdentity>(&mut conn)
         .optional();
 
-    let user = match existing {
-        Ok(Some(u)) => u,
-        Ok(None) => {
-            let new_user = NewUser {
-                email: email_opt.as_deref(),
-                name: name_opt.as_deref(),
-                oauth_provider: Some(provider.key.as_str()),
-                oauth_subject: Some(subject.as_str()),
-                password_hash: None,
-            };
-            match diesel::insert_into(users).values(&new_user).execute(&mut conn) {
-                Ok(_) => {}
-                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("insert user: {}", e)).into_response(),
-            }
-            match users
-                .filter(oauth_provider.eq(&provider.key))
-                .filter(oauth_subject.eq(&subject))
-                .first::<User>(&mut conn) {
+    let user = match existing_identity {
+        Ok(Some(identity)) => {
+            // Load the linked user
+            match users.find(identity.user_id).first::<User>(&mut conn) {
                 Ok(u) => u,
-                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("fetch new user: {}", e)).into_response(),
+                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("load user: {}", e)).into_response(),
             }
         }
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("query user: {}", e)).into_response(),
+        Ok(None) => {
+            // 2) No identity yet. If we have an email, try to link to existing user by email
+            let maybe_existing_user = match &email_opt {
+                Some(email_val) => users.filter(email.eq(email_val)).first::<User>(&mut conn).optional(),
+                None => Ok(None),
+            };
+
+            let user_to_link = match maybe_existing_user {
+                Ok(Some(u)) => u,
+                Ok(None) => {
+                    // 3) Create a brand new user
+                    let new_user = NewUser {
+                        email: email_opt.as_deref(),
+                        name: name_opt.as_deref(),
+                        oauth_provider: None,
+                        oauth_subject: None,
+                        password_hash: None,
+                    };
+                    if let Err(e) = diesel::insert_into(users).values(&new_user).execute(&mut conn) {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, format!("insert user: {}", e)).into_response();
+                    }
+                    // Fetch the created user (by email if we have it, else by latest row with NULL email is ambiguous; but subject is unique so we can just refetch by email or by max id)
+                    match &email_opt {
+                        Some(email_val) => match users.filter(email.eq(email_val)).first::<User>(&mut conn) {
+                            Ok(u) => u,
+                            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("fetch new user: {}", e)).into_response(),
+                        },
+                        None => {
+                            // Fallback: get most recent user
+                            match users.order(id.desc()).first::<User>(&mut conn) {
+                                Ok(u) => u,
+                                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("fetch new user by id: {}", e)).into_response(),
+                            }
+                        }
+                    }
+                }
+                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("query user by email: {}", e)).into_response(),
+            };
+
+            // Create identity pointing to the user
+            let new_identity = NewUserIdentity {
+                user_id: user_to_link.id,
+                provider_key: &provider.key,
+                subject: &subject,
+            };
+            if let Err(e) = diesel::insert_into(ids_dsl::user_identities).values(&new_identity).execute(&mut conn) {
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("insert identity: {}", e)).into_response();
+            }
+            user_to_link
+        }
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("query identity: {}", e)).into_response(),
     };
 
     let token = match create_jwt(&format!("user:{}", user.id), &state.config.jwt_secret, 60 * 24) {

@@ -1,14 +1,7 @@
-mod db;
-mod models;
-mod schema;
-mod config;
-mod routes;
-mod security;
-
 use axum::{Router, routing::{get, post}};
 use tower_http::{cors::{Any, CorsLayer}, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use crate::{config::AppConfig, db::DbPool, routes::{health, register, oauth_login, oauth_callback}};
+use oauth3::{config::AppConfig, db::{self, DbPool}, routes::{self, health, register, oauth_login, oauth_callback}};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -33,7 +26,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/register", post(register))
-        .route("/auth/login/:provider", get(oauth_login))
+        .route("/auth/login/{provider}", get(oauth_login))
         .route("/auth/callback", get(oauth_callback))
         .with_state(state)
         .layer(

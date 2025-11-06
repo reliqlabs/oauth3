@@ -3,6 +3,7 @@
 A minimal Rust web API using Axum + Diesel (SQLite) with initial features:
 - Create accounts (email + password)
 - Login via SSO/OAuth2 (generic provider config)
+- Link multiple OAuth2 providers to the same account (auto-linked by verified email when available)
 
 This is a starter service to build upon.
 

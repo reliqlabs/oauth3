@@ -1,4 +1,4 @@
-use crate::schema::{users, oauth_providers};
+use crate::schema::{users, oauth_providers, user_identities};
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -50,4 +50,24 @@ pub struct OauthProvider {
     pub scopes: String,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
+}
+
+#[derive(Queryable, Identifiable, Associations, Debug, Serialize, Clone)]
+#[diesel(table_name = user_identities)]
+#[diesel(belongs_to(User, foreign_key = user_id))]
+pub struct UserIdentity {
+    pub id: i32,
+    pub user_id: i32,
+    pub provider_key: String,
+    pub subject: String,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
+
+#[derive(Insertable, Debug, Deserialize)]
+#[diesel(table_name = user_identities)]
+pub struct NewUserIdentity<'a> {
+    pub user_id: i32,
+    pub provider_key: &'a str,
+    pub subject: &'a str,
 }

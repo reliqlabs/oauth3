@@ -29,3 +29,14 @@ diesel::table! {
         updated_at -> Timestamp,
     }
 }
+
+diesel::table! {
+    user_identities (id) {
+        id -> Integer,
+        user_id -> Integer,
+        provider_key -> Text,
+        subject -> Text,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
+    }
+}
