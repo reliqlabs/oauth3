@@ -1,0 +1,38 @@
+[package]
+name = "oauth3"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.8", features = ["macros", "json"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_with = "3"
+thiserror = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+dotenvy = "0.15"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Database
+diesel = { version = "2", features = ["sqlite", "r2d2", "chrono"] }
+diesel_migrations = "2"
+r2d2 = "0.8"
+
+# Auth
+jsonwebtoken = "9"
+argon2 = { version = "0.5", features = ["std"] }
+rand = "0.8"
+
+# OAuth2 / HTTP
+oauth2 = { version = "4.4", default-features = false, features = ["reqwest", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+url = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1

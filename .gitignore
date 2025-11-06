@@ -1,0 +1,46 @@
+# Rust / Cargo
+# Build output
+/target/
+
+# If this were a library you might ignore Cargo.lock, but for applications it should be committed
+# Cargo.lock
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# SQLite databases and journals
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+
+# Logs
+*.log
+logs/
+
+# OS-specific cruft
+.DS_Store
+Thumbs.db
+
+# IDE / Editor
+.idea/
+*.iml
+.vscode/
+
+# Coverage & reports
+coverage/
+*.lcov
+lcov.info
+coverage.xml
+cobertura.xml
+
+# Temporary files
+.tmp/
+*.tmp
+.tmp-* 
