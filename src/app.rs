@@ -23,27 +23,45 @@ pub async fn run() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::from_default_env())
         .try_init();
 
+    tracing::info!("🚀 Starting oauth3 server...");
+
     // Load configuration
+    tracing::info!("📋 Loading configuration from environment...");
     let config = AppConfig::load()?;
+    tracing::info!(
+        bind_addr = %config.server.bind_addr,
+        public_url = %config.server.public_url,
+        db_url = %config.db.url,
+        "✓ Configuration loaded"
+    );
+
     // Prepare cookie key
     let key_bytes = decode_cookie_key(&config.server.cookie_key_base64)?;
     let cookie_key = Key::from(&key_bytes);
+    tracing::info!("🔐 Cookie key loaded and validated");
 
     // Initialize DB pool and run migrations when applicable
     #[cfg(feature = "sqlite")]
     let sqlite_pool = {
+        tracing::info!("🗄️  Connecting to SQLite database...");
         let pool = crate::db::sqlite::make_pool(&config.db.url)?;
         // Run migrations eagerly on startup
         if let Ok(mut conn) = pool.get() {
+            tracing::info!("🔄 Running SQLite migrations...");
             let _ = crate::db::migrations::run_sqlite_migrations(&mut conn);
+            tracing::info!("✓ SQLite migrations complete");
         }
         pool
     };
 
     #[cfg(feature = "pg")]
     let pg_pool = {
+        tracing::info!("🗄️  Connecting to Postgres database...");
         let pool = crate::db::pg::make_pool(&config.db.url).await?;
-        // Migrations for pg can be handled externally for now (diesel migration run)
+        tracing::info!("✓ Database connection pool established");
+        tracing::info!("🔄 Running Postgres migrations...");
+        crate::db::migrations::run_pg_migrations_sync(&config.db.url)?;
+        tracing::info!("✓ Postgres migrations complete");
         pool
     };
 
@@ -53,21 +71,33 @@ pub async fn run() -> anyhow::Result<()> {
     #[cfg(feature = "pg")]
     let accounts: Arc<dyn crate::repos::AccountsRepo> = crate::repos::pg::PgAccountsRepo::new(pg_pool.clone());
 
+    tracing::info!("🔧 Initializing OIDC settings...");
+    let oidc = crate::auth::oidc::OidcSettings::from_config(&config)?;
+    tracing::info!(
+        google_mode = ?oidc.google_mode,
+        google_issuer = %oidc.google_issuer,
+        redirect_url = %oidc.google_redirect_url(),
+        "✓ OIDC settings initialized"
+    );
+
     let state = AppState {
         config: config.clone(),
         cookie_key: cookie_key.clone(),
         accounts,
-        oidc: crate::auth::oidc::OidcSettings::from_config(&config)?,
+        oidc,
         #[cfg(feature = "sqlite")]
         sqlite: sqlite_pool,
         #[cfg(feature = "pg")]
         pg: pg_pool,
     };
 
+    tracing::info!("🛣️  Building router with {} routes", 9);
     let app = build_router(state);
 
     let addr = config.server.bind_addr.clone();
-    tracing::info!(%addr, "listening");
+    tracing::info!("🌐 Server listening on {}", addr);
+    tracing::info!("✨ Ready to accept connections!");
+
     // Axum 0.8 uses hyper directly for serving
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
@@ -76,6 +106,7 @@ pub async fn run() -> anyhow::Result<()> {
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
+        .route("/", get(crate::web::pages::index))
         .route("/healthz", get(|| async { "ok" }))
         .route("/login", get(crate::web::pages::login))
         .route("/account", get(crate::web::pages::account))

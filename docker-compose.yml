@@ -29,6 +29,7 @@ services:
       - .env
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/oauth3
+      RUST_LOG: info,oauth3=debug
     ports:
       - "8080:8080"
 

@@ -4,12 +4,13 @@ use diesel_migrations::{embed_migrations, EmbeddedMigrations};
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 #[cfg(feature = "pg")]
-pub async fn run_pg_migrations(conn: &mut diesel_async::AsyncPgConnection) -> anyhow::Result<()> {
+pub fn run_pg_migrations_sync(db_url: &str) -> anyhow::Result<()> {
+    use diesel::prelude::*;
     use diesel_migrations::MigrationHarness;
-    // Diesel's MigrationHarness is currently sync; diesel_async provides an adapter via `RunQueryDsl` for queries,
-    // but for migrations we can run them using the provided harness on the underlying connection when supported.
-    // Placeholder: handled externally via CLI in dev. In production, consider a separate migrator binary.
-    let _ = conn; // silence unused for now
+
+    let mut conn = diesel::PgConnection::establish(db_url)?;
+    conn.run_pending_migrations(MIGRATIONS)
+        .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
     Ok(())
 }
 
