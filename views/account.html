@@ -1,0 +1,87 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Account</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, sans-serif; margin: 0; }
+    main { max-width: 720px; margin: 6vh auto; padding: 24px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.06); background: #fff; }
+    h1 { margin-top: 0; font-size: 26px; }
+    section { margin-top: 24px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #eee; }
+    .providers { display: flex; gap: 12px; flex-wrap: wrap; }
+    form.inline { display: inline; }
+    button { padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; background: #fff; cursor: pointer; }
+    a { color: inherit; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Account</h1>
+    <p><a href="/login">Back to login</a> · <a href="/me" target="_blank">View session</a></p>
+
+    <section>
+      <h2>Linked identities</h2>
+      <table>
+        <thead>
+          <tr><th>Provider</th><th>Subject</th><th>Email</th><th>Linked at</th><th></th></tr>
+        </thead>
+        <tbody id="identities">
+          <tr><td colspan="5">Loading…</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Link a new provider</h2>
+      <div class="providers">
+        <form class="inline" method="post" action="/account/link/google">
+          <button type="submit">Link Google</button>
+        </form>
+        <form class="inline" method="post" action="/account/link/github">
+          <button type="submit">Link GitHub</button>
+        </form>
+        <form class="inline" method="post" action="/account/link/dex">
+          <button type="submit">Link Dex</button>
+        </form>
+      </div>
+    </section>
+
+    <section>
+      <form method="post" action="/logout">
+        <button type="submit">Log out</button>
+      </form>
+    </section>
+  </main>
+
+  <script>
+    async function loadIdentities() {
+      try {
+        const res = await fetch('/account/linked-identities', { credentials: 'include' });
+        const tbl = document.getElementById('identities');
+        if (!res.ok) { tbl.innerHTML = '<tr><td colspan="5">Not authenticated</td></tr>'; return; }
+        const data = await res.json();
+        const rows = (data.items || []).map(it => `
+          <tr>
+            <td>${it.provider_key}</td>
+            <td>${it.subject}</td>
+            <td>${it.email ?? ''}</td>
+            <td>${it.linked_at}</td>
+            <td>
+              <form class="inline" method="post" action="/account/unlink/${it.provider_key}" onsubmit="return confirm('Unlink ' + '${it.provider_key}' + '?')">
+                <button type="submit">Unlink</button>
+              </form>
+            </td>
+          </tr>`).join('');
+        tbl.innerHTML = rows || '<tr><td colspan="5">No identities linked</td></tr>';
+      } catch (e) {
+        document.getElementById('identities').innerHTML = '<tr><td colspan="5">Failed to load</td></tr>';
+      }
+    }
+    loadIdentities();
+  </script>
+</body>
+</html>

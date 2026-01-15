@@ -1,0 +1,7 @@
+/* Minimal styles for the login page */
+:root { color-scheme: light dark; }
+html, body { height: 100%; }
+body { background: #fafafa; }
+@media (prefers-color-scheme: dark) {
+  body { background: #0b0b0b; color: #e6e6e6; }
+}

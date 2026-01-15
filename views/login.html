@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Login</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, sans-serif; margin: 0; }
+    main { max-width: 520px; margin: 10vh auto; padding: 24px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.06); }
+    h1 { margin-top: 0; font-size: 26px; }
+    .providers { display: grid; gap: 12px; margin-top: 20px; }
+    a.btn { display: inline-block; text-decoration: none; padding: 12px 16px; border: 1px solid #ddd; border-radius: 8px; color: #111; background: #fff; }
+    a.btn:hover { background: #f8f8f8; }
+  </style>
+  </head>
+<body>
+  <main>
+    <h1>Sign in</h1>
+    <p>Choose a provider to continue:</p>
+    <div class="providers">
+      <a class="btn" href="/auth/google">Continue with Google</a>
+      <a class="btn" href="/auth/github">Continue with GitHub</a>
+      <a class="btn" href="/auth/dex">Continue with Dex (Local)</a>
+      <!-- Add more providers as needed -->
+    </div>
+  </main>
+</body>
+</html>
