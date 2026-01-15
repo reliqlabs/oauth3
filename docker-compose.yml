@@ -25,13 +25,28 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      dex:
+        condition: service_started
     env_file:
       - .env
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/oauth3
       RUST_LOG: info,oauth3=debug
+      # Point to dex in docker network for server-to-server calls, 
+      # but browser will use localhost:5556
+      DEX_ISSUER_INTERNAL: http://dex:5556/dex
     ports:
       - "8080:8080"
 
+  dex:
+    image: dexidp/dex:v2.41.1
+    ports:
+      - "5556:5556"
+    volumes:
+      - ./dex-config.yaml:/etc/dex/config.docker.yaml
+      - dexdata:/var/dex
+    command: dex serve /etc/dex/config.docker.yaml
+
 volumes:
   pgdata:
+  dexdata:
