@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use crate::models::{
     identity::{NewIdentity, UserIdentity},
     user::{NewUser, User},
+    provider::Provider,
 };
 
 #[async_trait]
@@ -12,6 +13,11 @@ pub trait AccountsRepo: Send + Sync {
     async fn link_identity(&self, new_identity: NewIdentity<'_>) -> anyhow::Result<()>;
     async fn unlink_identity_by_provider(&self, user_id: &str, provider_key: &str) -> anyhow::Result<usize>;
     async fn count_identities(&self, user_id: &str) -> anyhow::Result<i64>;
+
+    // Provider operations
+    async fn list_providers(&self) -> anyhow::Result<Vec<Provider>>;
+    async fn get_provider(&self, id: &str) -> anyhow::Result<Option<Provider>>;
+    async fn save_provider(&self, provider: Provider) -> anyhow::Result<()>;
 }
 
 #[cfg(feature = "pg")]

@@ -77,16 +77,36 @@ async fn test_app(dex_issuer: String) -> Router {
 
     let accounts: Arc<dyn repos::AccountsRepo> = oauth3::repos::sqlite::SqliteAccountsRepo::new(sqlite_pool.clone());
 
+    let oidc = oauth3::auth::oidc::OidcSettings::from_config(&cfg).expect("oidc settings");
     let state = AppState {
         config: cfg.clone(),
         cookie_key,
-        accounts,
-        oidc: oauth3::auth::oidc::OidcSettings::from_config(&cfg).expect("oidc settings"),
+        accounts: accounts.clone(),
+        oidc,
         #[cfg(feature = "sqlite")] 
         sqlite: sqlite_pool,
         #[cfg(feature = "pg")]
         pg: oauth3::db::pg::make_pool("").await.unwrap(), 
     };
+
+    // Explicitly seed the dex provider for the test
+    use oauth3::models::provider::Provider;
+    let now = "2026-01-15T00:00:00Z".to_string();
+    accounts.save_provider(Provider {
+        id: "dex".into(),
+        name: "Dex".into(),
+        provider_type: "oidc".into(),
+        mode: "live".into(),
+        client_id: Some("oauth3-dev".into()),
+        client_secret: Some("dex-secret".into()),
+        issuer: Some(dex_issuer),
+        auth_url: None,
+        token_url: None,
+        redirect_path: "/auth/callback/dex".into(),
+        is_enabled: 1,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+    }).await.expect("failed to seed dex provider");
 
     build_router(state)
 }
@@ -110,7 +130,13 @@ async fn full_dex_oidc_flow_with_docker() {
 
     assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
     let location = res.headers().get(header::LOCATION).unwrap().to_str().unwrap();
-    let app_set_cookie = res.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap().to_string();
+    
+    // The generalized OIDC implementation uses a provider-specific cookie
+    let app_set_cookie = res.headers().get_all(header::SET_COOKIE)
+        .iter()
+        .find(|c| c.to_str().unwrap().contains("oidc_tmp_dex"))
+        .expect("oidc_tmp_dex cookie missing")
+        .to_str().unwrap().to_string();
     
     let url = url::Url::parse(location).unwrap();
     let state_param = url.query_pairs().find(|(k, _)| k == "state").map(|(_, v)| v.into_owned()).unwrap();

@@ -7,9 +7,10 @@ use diesel::OptionalExtension;
 use crate::models::{
     identity::{NewIdentity, UserIdentity},
     user::{NewUser, User},
+    provider::Provider,
 };
 use crate::repos::AccountsRepo;
-use crate::schema::{user_identities, users};
+use crate::schema::{user_identities, users, oauth_providers};
 
 pub struct SqliteAccountsRepo {
     pool: crate::db::sqlite::SqlitePool,
@@ -164,5 +165,50 @@ impl AccountsRepo for SqliteAccountsRepo {
         })
         .await??;
         Ok(n)
+    }
+
+    async fn list_providers(&self) -> anyhow::Result<Vec<Provider>> {
+        let pool = self.pool.clone();
+        let providers = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Provider>> {
+            let mut conn = pool.get()?;
+            let rows = oauth_providers::table
+                .filter(oauth_providers::is_enabled.eq(1))
+                .order(oauth_providers::name.asc())
+                .load::<Provider>(&mut conn)?;
+            Ok(rows)
+        })
+        .await??;
+        Ok(providers)
+    }
+
+    async fn get_provider(&self, id: &str) -> anyhow::Result<Option<Provider>> {
+        let id = id.to_string();
+        let pool = self.pool.clone();
+        let provider = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Provider>> {
+            let mut conn = pool.get()?;
+            let p = oauth_providers::table
+                .find(id)
+                .first::<Provider>(&mut conn)
+                .optional()?;
+            Ok(p)
+        })
+        .await??;
+        Ok(provider)
+    }
+
+    async fn save_provider(&self, provider: Provider) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            diesel::insert_into(oauth_providers::table)
+                .values(&provider)
+                .on_conflict(oauth_providers::id)
+                .do_update()
+                .set(&provider)
+                .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
     }
 }

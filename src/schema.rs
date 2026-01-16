@@ -1,6 +1,24 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    oauth_providers (id) {
+        id -> Text,
+        name -> Text,
+        provider_type -> Text,
+        mode -> Text,
+        client_id -> Nullable<Text>,
+        client_secret -> Nullable<Text>,
+        issuer -> Nullable<Text>,
+        auth_url -> Nullable<Text>,
+        token_url -> Nullable<Text>,
+        redirect_path -> Text,
+        is_enabled -> Integer,
+        created_at -> Text,
+        updated_at -> Text,
+    }
+}
+
+diesel::table! {
     user_identities (id) {
         id -> Text,
         user_id -> Text,

@@ -9,9 +9,10 @@ use diesel_async::{AsyncPgConnection, RunQueryDsl, AsyncConnection};
 use crate::models::{
     identity::NewIdentity,
     user::{NewUser, User},
+    provider::Provider,
 };
 use crate::repos::AccountsRepo;
-use crate::schema::{user_identities, users};
+use crate::schema::{user_identities, users, oauth_providers};
 
 pub struct PgAccountsRepo {
     pool: crate::db::pg::PgPool,
@@ -115,5 +116,37 @@ impl AccountsRepo for PgAccountsRepo {
             .first(&mut conn)
             .await?;
         Ok(n)
+    }
+
+    async fn list_providers(&self) -> anyhow::Result<Vec<Provider>> {
+        let mut conn = self.pool.get().await?;
+        let rows = oauth_providers::table
+            .filter(oauth_providers::is_enabled.eq(1))
+            .order(oauth_providers::name.asc())
+            .load::<Provider>(&mut conn)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn get_provider(&self, id: &str) -> anyhow::Result<Option<Provider>> {
+        let mut conn = self.pool.get().await?;
+        let p = oauth_providers::table
+            .find(id)
+            .first::<Provider>(&mut conn)
+            .await
+            .optional()?;
+        Ok(p)
+    }
+
+    async fn save_provider(&self, provider: Provider) -> anyhow::Result<()> {
+        let mut conn = self.pool.get().await?;
+        diesel::insert_into(oauth_providers::table)
+            .values(&provider)
+            .on_conflict(oauth_providers::id)
+            .do_update()
+            .set(&provider)
+            .execute(&mut conn)
+            .await?;
+        Ok(())
     }
 }

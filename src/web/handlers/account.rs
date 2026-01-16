@@ -37,6 +37,17 @@ pub async fn list_identities(State(state): State<AppState>, cookies: Cookies) ->
     }
 }
 
+// List all enabled providers for the login page
+pub async fn list_providers(State(state): State<AppState>) -> impl IntoResponse {
+    match state.accounts.list_providers().await {
+        Ok(list) => (StatusCode::OK, Json(json!({ "items": list }))).into_response(),
+        Err(e) => {
+            tracing::error!(error=?e, "failed to list providers");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 // Begin linking a new provider: set a short-lived cookie flag and redirect to provider flow
 pub async fn start_link_provider(State(state): State<AppState>, cookies: Cookies, Path(provider): Path<String>) -> impl IntoResponse {
     if session::get_session(&cookies, &state.cookie_key).is_none() {

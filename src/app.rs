@@ -73,23 +73,22 @@ pub async fn run() -> anyhow::Result<()> {
 
     tracing::info!("🔧 Initializing OIDC settings...");
     let oidc = crate::auth::oidc::OidcSettings::from_config(&config)?;
-    tracing::info!(
-        google_mode = ?oidc.google_mode,
-        google_issuer = %oidc.google_issuer,
-        redirect_url = %oidc.google_redirect_url(),
-        "✓ OIDC settings initialized"
-    );
 
     let state = AppState {
         config: config.clone(),
         cookie_key: cookie_key.clone(),
-        accounts,
+        accounts: accounts.clone(),
         oidc,
         #[cfg(feature = "sqlite")]
         sqlite: sqlite_pool,
         #[cfg(feature = "pg")]
         pg: pg_pool,
     };
+
+    // Seed providers from environment for backward compatibility/initial setup
+    if let Err(e) = seed_providers_from_env(&state).await {
+        tracing::error!(error=?e, "failed to seed providers from environment");
+    }
 
     tracing::info!("🛣️  Building router with {} routes", 9);
     let app = build_router(state);
@@ -104,6 +103,76 @@ pub async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn seed_providers_from_env(state: &AppState) -> anyhow::Result<()> {
+    use crate::models::provider::Provider;
+    let now = time::OffsetDateTime::now_utc().to_string();
+
+    // Helper to get env with default
+    let get_env = |k: &str, default: &str| std::env::var(k).unwrap_or_else(|_| default.to_string());
+
+    // 1. Google
+    if state.accounts.get_provider("google").await?.is_none() {
+        let mode = get_env("AUTH_GOOGLE_MODE", "placeholder");
+        state.accounts.save_provider(Provider {
+            id: "google".into(),
+            name: "Google".into(),
+            provider_type: "oidc".into(),
+            mode,
+            client_id: std::env::var("GOOGLE_CLIENT_ID").ok(),
+            client_secret: std::env::var("GOOGLE_CLIENT_SECRET").ok(),
+            issuer: Some(get_env("GOOGLE_ISSUER", "https://accounts.google.com")),
+            auth_url: None,
+            token_url: None,
+            redirect_path: "/auth/callback/google".into(),
+            is_enabled: 1,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        }).await?;
+    }
+
+    // 2. GitHub
+    if state.accounts.get_provider("github").await?.is_none() {
+        let mode = get_env("AUTH_GITHUB_MODE", "placeholder");
+        state.accounts.save_provider(Provider {
+            id: "github".into(),
+            name: "GitHub".into(),
+            provider_type: "oauth2".into(),
+            mode,
+            client_id: std::env::var("GITHUB_CLIENT_ID").ok(),
+            client_secret: std::env::var("GITHUB_CLIENT_SECRET").ok(),
+            issuer: None,
+            auth_url: Some("https://github.com/login/oauth/authorize".into()),
+            token_url: Some("https://github.com/login/oauth/access_token".into()),
+            redirect_path: "/auth/callback/github".into(),
+            is_enabled: 1,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        }).await?;
+    }
+
+    // 3. Dex
+    if state.accounts.get_provider("dex").await?.is_none() {
+        let mode = get_env("AUTH_DEX_MODE", "placeholder");
+        state.accounts.save_provider(Provider {
+            id: "dex".into(),
+            name: "Dex".into(),
+            provider_type: "oidc".into(),
+            mode,
+            client_id: std::env::var("DEX_CLIENT_ID").ok(),
+            client_secret: std::env::var("DEX_CLIENT_SECRET").ok(),
+            issuer: Some(get_env("DEX_ISSUER", "http://localhost:5556/dex")),
+            auth_url: None,
+            token_url: None,
+            redirect_path: "/auth/callback/dex".into(),
+            is_enabled: 1,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        }).await?;
+    }
+
+    Ok(())
+}
+
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/", get(crate::web::pages::index))
@@ -113,6 +182,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth/{provider}", get(crate::web::handlers::auth::start))
         .route("/auth/callback/{provider}", get(crate::web::handlers::auth::callback))
         .route("/me", get(crate::web::handlers::account::me))
+        .route("/providers", get(crate::web::handlers::account::list_providers))
         .route("/logout", post(crate::web::handlers::account::logout))
         .route("/account/linked-identities", get(crate::web::handlers::account::list_identities))
         .route("/account/link/{provider}", post(crate::web::handlers::account::start_link_provider))
