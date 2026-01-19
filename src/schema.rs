@@ -11,6 +11,7 @@ diesel::table! {
         issuer -> Nullable<Text>,
         auth_url -> Nullable<Text>,
         token_url -> Nullable<Text>,
+        scopes -> Nullable<Text>,
         redirect_path -> Text,
         is_enabled -> Integer,
         created_at -> Text,
@@ -28,6 +29,7 @@ diesel::table! {
         access_token -> Nullable<Text>,
         refresh_token -> Nullable<Text>,
         expires_at -> Nullable<Text>,
+        scopes -> Nullable<Text>,
         claims -> Nullable<Text>,
         linked_at -> Text,
     }

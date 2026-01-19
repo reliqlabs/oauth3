@@ -29,6 +29,9 @@ fn default_public_url() -> String { "http://127.0.0.1:8080".to_string() }
 
 impl AppConfig {
     pub fn load() -> anyhow::Result<Self> {
+        // Load .env file if it exists
+        let _ = dotenvy::dotenv();
+
         let settings = config::Config::builder()
             .add_source(config::Environment::default().separator("_"))
             .build()?;

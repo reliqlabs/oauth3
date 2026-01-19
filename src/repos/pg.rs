@@ -105,7 +105,7 @@ impl AccountsRepo for PgAccountsRepo {
         Ok(())
     }
 
-    async fn update_identity_tokens(&self, provider_key: &str, subject: &str, access_token: &str, refresh_token: Option<&str>, expires_at: Option<&str>) -> anyhow::Result<()> {
+    async fn update_identity_tokens(&self, provider_key: &str, subject: &str, access_token: &str, refresh_token: Option<&str>, expires_at: Option<&str>, scopes: Option<&str>) -> anyhow::Result<()> {
         use user_identities::dsl as ui;
         let mut conn = self.pool.get().await?;
         diesel::update(
@@ -117,6 +117,7 @@ impl AccountsRepo for PgAccountsRepo {
             ui::access_token.eq(access_token),
             ui::refresh_token.eq(refresh_token),
             ui::expires_at.eq(expires_at),
+            ui::scopes.eq(scopes),
         ))
         .execute(&mut conn)
         .await?;

@@ -60,6 +60,7 @@ impl AccountsRepo for SqliteAccountsRepo {
             new_identity.access_token.map(|s| s.to_string()),
             new_identity.refresh_token.map(|s| s.to_string()),
             new_identity.expires_at.map(|s| s.to_string()),
+            new_identity.scopes.map(|s| s.to_string()),
             new_identity.claims.map(|s| s.to_string()),
         );
         let user = tokio::task::spawn_blocking(move || -> anyhow::Result<User> {
@@ -82,7 +83,8 @@ impl AccountsRepo for SqliteAccountsRepo {
                         access_token: new_identity.5.as_deref(),
                         refresh_token: new_identity.6.as_deref(),
                         expires_at: new_identity.7.as_deref(),
-                        claims: new_identity.8.as_deref(),
+                        scopes: new_identity.8.as_deref(),
+                        claims: new_identity.9.as_deref(),
                     })
                     .execute(conn)?;
                 let u = users::table.find(&new_user.0).first::<User>(conn)?;
@@ -138,6 +140,7 @@ impl AccountsRepo for SqliteAccountsRepo {
             new_identity.access_token.map(|s| s.to_string()),
             new_identity.refresh_token.map(|s| s.to_string()),
             new_identity.expires_at.map(|s| s.to_string()),
+            new_identity.scopes.map(|s| s.to_string()),
             new_identity.claims.map(|s| s.to_string()),
         );
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
@@ -152,7 +155,8 @@ impl AccountsRepo for SqliteAccountsRepo {
                     access_token: new_identity.5.as_deref(),
                     refresh_token: new_identity.6.as_deref(),
                     expires_at: new_identity.7.as_deref(),
-                    claims: new_identity.8.as_deref(),
+                    scopes: new_identity.8.as_deref(),
+                    claims: new_identity.9.as_deref(),
                 })
                 .execute(&mut conn)?;
             Ok(())
@@ -161,14 +165,14 @@ impl AccountsRepo for SqliteAccountsRepo {
         Ok(())
     }
 
-    async fn update_identity_tokens(&self, provider_key: &str, subject: &str, access_token: &str, refresh_token: Option<&str>, expires_at: Option<&str>) -> anyhow::Result<()> {
+    async fn update_identity_tokens(&self, provider_key: &str, subject: &str, access_token: &str, refresh_token: Option<&str>, expires_at: Option<&str>, scopes: Option<&str>) -> anyhow::Result<()> {
         let pool = self.pool.clone();
         let provider_key = provider_key.to_string();
         let subject = subject.to_string();
         let access_token = access_token.to_string();
         let refresh_token = refresh_token.map(|s| s.to_string());
         let expires_at = expires_at.map(|s| s.to_string());
-
+        let scopes = scopes.map(|s| s.to_string());
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
             let mut conn = pool.get()?;
             use user_identities::dsl as ui;
@@ -181,6 +185,7 @@ impl AccountsRepo for SqliteAccountsRepo {
                 ui::access_token.eq(&access_token),
                 ui::refresh_token.eq(&refresh_token),
                 ui::expires_at.eq(&expires_at),
+                ui::scopes.eq(&scopes),
             ))
             .execute(&mut conn)?;
             Ok(())

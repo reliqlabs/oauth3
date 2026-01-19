@@ -235,10 +235,14 @@ Troubleshooting builds with Postgres:
 
 ---
 
-### Roadmap (short)
-- Implement Google OIDC end-to-end: discovery, state/nonce/PKCE, token exchange, ID token verification, repo integration
-- Account linking endpoints and GitHub OAuth2
-- Tests: unit + integration with mocked providers
+### Roadmap
+- **Encryption at Rest**: Implement AEAD (e.g., AES-GCM) encryption for `access_token` and `refresh_token` columns.
+- **Automated Token Refresh Middleware**: Create an Axum extractor or middleware to automatically refresh tokens before expiry.
+- **Background Cleanup**: Implement a background task to periodically clean up expired or revoked tokens/identities.
+- **Token Revocation Support**: Add support for OIDC/OAuth2 revocation endpoints during logout or unlinking.
+- **Configuration Externalization**: Move provider definitions into an external configuration file or management UI.
+- **UI/UX Improvements**: Dynamic login page rendering and improved error feedback.
+- **Observability**: Structured logging with trace IDs and authentication metrics.
 
 ---
 

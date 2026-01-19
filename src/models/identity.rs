@@ -15,6 +15,7 @@ pub struct UserIdentity {
     pub access_token: Option<String>,
     pub refresh_token: Option<String>,
     pub expires_at: Option<String>,
+    pub scopes: Option<String>,
     pub claims: Option<String>,
     pub linked_at: String,
 }
@@ -30,5 +31,6 @@ pub struct NewIdentity<'a> {
     pub access_token: Option<&'a str>,
     pub refresh_token: Option<&'a str>,
     pub expires_at: Option<&'a str>,
+    pub scopes: Option<&'a str>,
     pub claims: Option<&'a str>,
 }

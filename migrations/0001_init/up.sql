@@ -18,6 +18,7 @@ CREATE TABLE user_identities (
   access_token TEXT,
   refresh_token TEXT,
   expires_at TEXT,
+  scopes TEXT,
   claims TEXT,
   linked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(provider_key, subject)
@@ -34,6 +35,7 @@ CREATE TABLE oauth_providers (
     issuer TEXT,
     auth_url TEXT,
     token_url TEXT,
+    scopes TEXT,
     redirect_path TEXT NOT NULL,
     is_enabled INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

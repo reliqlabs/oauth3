@@ -13,6 +13,7 @@ pub struct Provider {
     pub issuer: Option<String>,
     pub auth_url: Option<String>,
     pub token_url: Option<String>,
+    pub scopes: Option<String>,
     pub redirect_path: String,
     pub is_enabled: i32,
     pub created_at: String,

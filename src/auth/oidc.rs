@@ -4,7 +4,6 @@ use axum::{
 };
 use tower_cookies::Cookies;
 use openidconnect::OAuth2TokenResponse;
-use oauth2::TokenResponse;
 use crate::{app::AppState, auth::session, models::identity::NewIdentity, web::handlers::account};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +28,7 @@ pub struct ProviderConfig {
     pub issuer: Option<String>,
     pub auth_url: Option<String>,
     pub token_url: Option<String>,
+    pub scopes: Option<String>,
     pub redirect_path: String,
 }
 
@@ -98,6 +98,7 @@ impl From<Provider> for ProviderConfig {
             issuer: p.issuer,
             auth_url: p.auth_url,
             token_url: p.token_url,
+            scopes: p.scopes,
             redirect_path: p.redirect_path,
         }
     }
@@ -186,6 +187,7 @@ pub async fn callback(state: &AppState, cookies: Cookies, provider_key: &str, q:
                     access_token: None,
                     refresh_token: None,
                     expires_at: None,
+                    scopes: None,
                     claims: None 
                 };
                 if let Err(e) = state.accounts.link_identity(new_identity).await {
@@ -228,18 +230,39 @@ async fn start_oidc_live(state: &AppState, cookies: Cookies, provider_key: &str,
 
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
-    let (auth_url, csrf_token, nonce) = client
-        .authorize_url(
-            AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
-            CsrfToken::new_random,
-            Nonce::new_random,
-        )
-        .add_scope(Scope::new("openid".to_string()))
-        .add_scope(Scope::new("email".to_string()))
-        .add_scope(Scope::new("profile".to_string()))
-        .add_scope(Scope::new("offline_access".to_string()))
-        .set_pkce_challenge(pkce_challenge)
-        .url();
+    let (auth_url, csrf_token, nonce) = {
+        let mut request = client
+            .authorize_url(
+                AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
+                CsrfToken::new_random,
+                Nonce::new_random,
+            );
+            
+        if let Some(s) = &config.scopes {
+            for scope in s.split_whitespace() {
+                request = request.add_scope(Scope::new(scope.to_string()));
+            }
+        } else {
+            // Default scopes for OIDC
+            request = request
+                .add_scope(Scope::new("openid".to_string()))
+                .add_scope(Scope::new("email".to_string()))
+                .add_scope(Scope::new("profile".to_string()));
+                
+            // Google does not like offline_access scope
+            if provider_key != "google" {
+                request = request.add_scope(Scope::new("offline_access".to_string()));
+            }
+        }
+        
+        // Google specific: access_type=offline and prompt=consent to get a refresh token
+        if provider_key == "google" {
+            request = request.add_extra_param("access_type", "offline");
+            request = request.add_extra_param("prompt", "consent");
+        }
+
+        request.set_pkce_challenge(pkce_challenge).url()
+    };
 
     let tmp = TmpAuthState {
         state: csrf_token.secret().to_string(),
@@ -271,21 +294,34 @@ async fn callback_oidc_live(state: &AppState, cookies: Cookies, provider_key: &s
     let client_secret = ClientSecret::new(config.client_secret.clone().ok_or_else(|| anyhow::anyhow!("missing client_secret for {}", provider_key))?);
     
     let redirect_uri = state.oidc.redirect_url(&config.redirect_path);
-    let redirect_url = RedirectUrl::new(redirect_uri)?;
+    let redirect_url = RedirectUrl::new(redirect_uri.clone())?;
     
     let client = CoreClient::from_provider_metadata(provider_metadata, client_id, Some(client_secret))
         .set_redirect_uri(redirect_url);
 
-    let token_resp = client
+    let token_resp = match client
         .exchange_code(AuthorizationCode::new(code))
         .set_pkce_verifier(PkceCodeVerifier::new(tmp.pkce_verifier))
         .request_async(async_http_client)
-        .await?;
+        .await {
+            Ok(r) => r,
+            Err(e) => {
+                if let openidconnect::RequestTokenError::ServerResponse(err) = &e {
+                    tracing::error!(provider=%provider_key, error=?err, redirect_uri=%redirect_uri, "OIDC token exchange server error response");
+                } else {
+                    tracing::error!(provider=%provider_key, error=?e, redirect_uri=%redirect_uri, "OIDC token exchange failed");
+                }
+                return Err(anyhow::anyhow!("OIDC token exchange failed: {:?}", e));
+            }
+        };
 
     let access_token = token_resp.access_token().secret().to_string();
     let refresh_token = token_resp.refresh_token().map(|t: &openidconnect::RefreshToken| t.secret().to_string());
     let expires_at = token_resp.expires_in().map(|d: std::time::Duration| {
         (time::OffsetDateTime::now_utc() + d).to_string()
+    });
+    let scopes = token_resp.scopes().map(|s| {
+        s.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
     });
 
     let id_token = token_resp.id_token().ok_or_else(|| anyhow::anyhow!("missing id_token"))?;
@@ -309,6 +345,7 @@ async fn callback_oidc_live(state: &AppState, cookies: Cookies, provider_key: &s
                     access_token: Some(&access_token),
                     refresh_token: refresh_token.as_deref(),
                     expires_at: expires_at.as_deref(),
+                    scopes: scopes.as_deref(),
                     claims: None 
                 };
                 state.accounts.link_identity(new_identity).await?;
@@ -319,7 +356,7 @@ async fn callback_oidc_live(state: &AppState, cookies: Cookies, provider_key: &s
     }
 
     if let Some(user) = state.accounts.find_user_by_identity(provider_key, &sub).await? {
-        state.accounts.update_identity_tokens(provider_key, &sub, &access_token, refresh_token.as_deref(), expires_at.as_deref()).await?;
+        state.accounts.update_identity_tokens(provider_key, &sub, &access_token, refresh_token.as_deref(), expires_at.as_deref(), scopes.as_deref()).await?;
         session::set_session(&cookies, &state.cookie_key, &user.id, 60);
         return Ok(Redirect::temporary("/").into_response());
     }
@@ -336,6 +373,7 @@ async fn callback_oidc_live(state: &AppState, cookies: Cookies, provider_key: &s
         access_token: Some(&access_token),
         refresh_token: refresh_token.as_deref(),
         expires_at: expires_at.as_deref(),
+        scopes: scopes.as_deref(),
         claims: None 
     };
     let user = state.accounts.create_user_and_link(new_user, new_identity).await?;
@@ -358,11 +396,22 @@ async fn start_oauth2_live(state: &AppState, cookies: Cookies, provider_key: &st
     let client = BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url))
         .set_redirect_uri(redirect_url);
 
-    let (auth_url, csrf_state) = client
-        .authorize_url(CsrfToken::new_random)
-        .add_scope(Scope::new("user:email".to_string()))
-        .add_scope(Scope::new("read:user".to_string()))
-        .url();
+    let (auth_url, csrf_state) = {
+        let mut request = client.authorize_url(CsrfToken::new_random);
+        
+        if let Some(s) = &config.scopes {
+            for scope in s.split_whitespace() {
+                request = request.add_scope(Scope::new(scope.to_string()));
+            }
+        } else {
+            // Default scopes for GitHub (since it's the only one we handle special logic for)
+            request = request
+                .add_scope(Scope::new("user:email".to_string()))
+                .add_scope(Scope::new("read:user".to_string()));
+        }
+        
+        request.url()
+    };
 
     let tmp = TmpAuthState {
         state: csrf_state.secret().to_string(),
@@ -396,25 +445,34 @@ async fn callback_oauth2_live(state: &AppState, cookies: Cookies, provider_key: 
     let token_url = TokenUrl::new(config.token_url.clone().ok_or_else(|| anyhow::anyhow!("missing token_url for {}", provider_key))?)?;
     
     let redirect_uri = state.oidc.redirect_url(&config.redirect_path);
-    let redirect_url = RedirectUrl::new(redirect_uri)?;
+    let redirect_url = RedirectUrl::new(redirect_uri.clone())?;
 
     let client = BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url))
         .set_redirect_uri(redirect_url);
 
-    let token_resp = client
+    let token_resp = match client
         .exchange_code(AuthorizationCode::new(code))
         .request_async(async_http_client)
-        .await?;
+        .await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(provider=%provider_key, error=?e, redirect_uri=%redirect_uri, "OAuth2 token exchange failed");
+                return Err(anyhow::anyhow!("OAuth2 token exchange failed: {:?}", e));
+            }
+        };
 
     let access_token = token_resp.access_token().secret().to_string();
     let refresh_token = token_resp.refresh_token().map(|t: &oauth2::RefreshToken| t.secret().to_string());
     let expires_at = token_resp.expires_in().map(|d: std::time::Duration| {
         (time::OffsetDateTime::now_utc() + d).to_string()
     });
+    let scopes = token_resp.scopes().map(|s| {
+        s.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
+    });
 
     // Provider specific user info fetching (GitHub example)
     if provider_key == "github" {
-        return fetch_github_user_and_login(state, cookies, &access_token, refresh_token.as_deref(), expires_at.as_deref()).await;
+        return fetch_github_user_and_login(state, cookies, &access_token, refresh_token.as_deref(), expires_at.as_deref(), scopes.as_deref()).await;
     }
 
     Err(anyhow::anyhow!("unsupported oauth2 provider: {}", provider_key))
@@ -425,7 +483,8 @@ async fn fetch_github_user_and_login(
     cookies: Cookies, 
     access_token: &str, 
     refresh_token: Option<&str>, 
-    expires_at: Option<&str>
+    expires_at: Option<&str>,
+    scopes: Option<&str>
 ) -> anyhow::Result<axum::response::Response> {
     let client = reqwest::Client::new();
     let user_info: serde_json::Value = client.get("https://api.github.com/user")
@@ -451,6 +510,7 @@ async fn fetch_github_user_and_login(
                     access_token: Some(access_token),
                     refresh_token,
                     expires_at,
+                    scopes,
                     claims: None 
                 };
                 state.accounts.link_identity(new_identity).await?;
@@ -461,7 +521,7 @@ async fn fetch_github_user_and_login(
     }
 
     if let Some(user) = state.accounts.find_user_by_identity("github", &sub).await? {
-        state.accounts.update_identity_tokens("github", &sub, access_token, refresh_token, expires_at).await?;
+        state.accounts.update_identity_tokens("github", &sub, access_token, refresh_token, expires_at, scopes).await?;
         session::set_session(&cookies, &state.cookie_key, &user.id, 60);
         return Ok(Redirect::temporary("/").into_response());
     }
@@ -478,6 +538,7 @@ async fn fetch_github_user_and_login(
         access_token: Some(access_token),
         refresh_token,
         expires_at,
+        scopes,
         claims: None 
     };
     let user = state.accounts.create_user_and_link(new_user, new_identity).await?;
@@ -515,12 +576,16 @@ pub async fn refresh_token(state: &AppState, provider_key: &str, subject: &str) 
             let access_token = token_resp.access_token().secret().to_string();
             let new_refresh_token = token_resp.refresh_token().map(|t: &openidconnect::RefreshToken| t.secret().to_string());
             let expires_at = token_resp.expires_in().map(|d: std::time::Duration| (time::OffsetDateTime::now_utc() + d).to_string());
+            let new_scopes = token_resp.scopes().map(|s| {
+                s.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
+            });
 
-            state.accounts.update_identity_tokens(provider_key, subject, &access_token, new_refresh_token.as_deref(), expires_at.as_deref()).await?;
+            state.accounts.update_identity_tokens(provider_key, subject, &access_token, new_refresh_token.as_deref(), expires_at.as_deref(), new_scopes.as_deref()).await?;
         }
         ProviderType::OAuth2 => {
-            use oauth2::{AuthUrl, ClientId, ClientSecret, RefreshToken, TokenUrl, TokenResponse};
+            use oauth2::{AuthUrl, ClientId, ClientSecret, RefreshToken, TokenUrl};
             use oauth2::basic::BasicClient;
+            use oauth2::TokenResponse as _;
 
             let client_id = ClientId::new(config.client_id.ok_or_else(|| anyhow::anyhow!("missing client_id"))?);
             let client_secret = ClientSecret::new(config.client_secret.ok_or_else(|| anyhow::anyhow!("missing client_secret"))?);
@@ -536,8 +601,11 @@ pub async fn refresh_token(state: &AppState, provider_key: &str, subject: &str) 
             let access_token = token_resp.access_token().secret().to_string();
             let new_refresh_token = token_resp.refresh_token().map(|t: &oauth2::RefreshToken| t.secret().to_string());
             let expires_at = token_resp.expires_in().map(|d: std::time::Duration| (time::OffsetDateTime::now_utc() + d).to_string());
+            let new_scopes = token_resp.scopes().map(|s| {
+                s.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
+            });
 
-            state.accounts.update_identity_tokens(provider_key, subject, &access_token, new_refresh_token.as_deref(), expires_at.as_deref()).await?;
+            state.accounts.update_identity_tokens(provider_key, subject, &access_token, new_refresh_token.as_deref(), expires_at.as_deref(), new_scopes.as_deref()).await?;
         }
     }
 
@@ -547,7 +615,3 @@ pub async fn refresh_token(state: &AppState, provider_key: &str, subject: &str) 
 // Use openidconnect's built-in reqwest async client function directly
 use openidconnect::reqwest::async_http_client;
 
-fn rand_string(len: usize) -> String {
-    use rand::{distributions::Alphanumeric, Rng};
-    rand::thread_rng().sample_iter(&Alphanumeric).take(len).map(char::from).collect()
-}
