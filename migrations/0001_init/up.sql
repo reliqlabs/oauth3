@@ -15,6 +15,9 @@ CREATE TABLE user_identities (
   provider_key TEXT NOT NULL,
   subject TEXT NOT NULL,
   email TEXT,
+  access_token TEXT,
+  refresh_token TEXT,
+  expires_at TEXT,
   claims TEXT,
   linked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(provider_key, subject)

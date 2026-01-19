@@ -12,11 +12,14 @@ pub struct UserIdentity {
     pub provider_key: String,
     pub subject: String,
     pub email: Option<String>,
+    pub access_token: Option<String>,
+    pub refresh_token: Option<String>,
+    pub expires_at: Option<String>,
     pub claims: Option<String>,
     pub linked_at: String,
 }
 
-#[derive(Debug, Clone, Insertable)]
+#[derive(Debug, Clone, Insertable, AsChangeset)]
 #[diesel(table_name = crate::schema::user_identities)]
 pub struct NewIdentity<'a> {
     pub id: &'a str,
@@ -24,5 +27,8 @@ pub struct NewIdentity<'a> {
     pub provider_key: &'a str,
     pub subject: &'a str,
     pub email: Option<&'a str>,
+    pub access_token: Option<&'a str>,
+    pub refresh_token: Option<&'a str>,
+    pub expires_at: Option<&'a str>,
     pub claims: Option<&'a str>,
 }

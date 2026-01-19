@@ -57,6 +57,9 @@ impl AccountsRepo for SqliteAccountsRepo {
             new_identity.provider_key.to_string(),
             new_identity.subject.to_string(),
             new_identity.email.map(|s| s.to_string()),
+            new_identity.access_token.map(|s| s.to_string()),
+            new_identity.refresh_token.map(|s| s.to_string()),
+            new_identity.expires_at.map(|s| s.to_string()),
             new_identity.claims.map(|s| s.to_string()),
         );
         let user = tokio::task::spawn_blocking(move || -> anyhow::Result<User> {
@@ -76,7 +79,10 @@ impl AccountsRepo for SqliteAccountsRepo {
                         provider_key: &new_identity.2,
                         subject: &new_identity.3,
                         email: new_identity.4.as_deref(),
-                        claims: new_identity.5.as_deref(),
+                        access_token: new_identity.5.as_deref(),
+                        refresh_token: new_identity.6.as_deref(),
+                        expires_at: new_identity.7.as_deref(),
+                        claims: new_identity.8.as_deref(),
                     })
                     .execute(conn)?;
                 let u = users::table.find(&new_user.0).first::<User>(conn)?;
@@ -103,6 +109,24 @@ impl AccountsRepo for SqliteAccountsRepo {
         res
     }
 
+    async fn list_identities_by_subject(&self, provider_key: &str, subject: &str) -> anyhow::Result<Option<UserIdentity>> {
+        let provider_key = provider_key.to_string();
+        let subject = subject.to_string();
+        let pool = self.pool.clone();
+        let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<UserIdentity>> {
+            let mut conn = pool.get()?;
+            use user_identities::dsl as ui;
+            let row = ui::user_identities
+                .filter(ui::provider_key.eq(&provider_key))
+                .filter(ui::subject.eq(&subject))
+                .first::<UserIdentity>(&mut conn)
+                .optional()?;
+            Ok(row)
+        })
+        .await?;
+        res
+    }
+
     async fn link_identity(&self, new_identity: NewIdentity<'_>) -> anyhow::Result<()> {
         let pool = self.pool.clone();
         let new_identity = (
@@ -111,6 +135,9 @@ impl AccountsRepo for SqliteAccountsRepo {
             new_identity.provider_key.to_string(),
             new_identity.subject.to_string(),
             new_identity.email.map(|s| s.to_string()),
+            new_identity.access_token.map(|s| s.to_string()),
+            new_identity.refresh_token.map(|s| s.to_string()),
+            new_identity.expires_at.map(|s| s.to_string()),
             new_identity.claims.map(|s| s.to_string()),
         );
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
@@ -122,9 +149,40 @@ impl AccountsRepo for SqliteAccountsRepo {
                     provider_key: &new_identity.2,
                     subject: &new_identity.3,
                     email: new_identity.4.as_deref(),
-                    claims: new_identity.5.as_deref(),
+                    access_token: new_identity.5.as_deref(),
+                    refresh_token: new_identity.6.as_deref(),
+                    expires_at: new_identity.7.as_deref(),
+                    claims: new_identity.8.as_deref(),
                 })
                 .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn update_identity_tokens(&self, provider_key: &str, subject: &str, access_token: &str, refresh_token: Option<&str>, expires_at: Option<&str>) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        let provider_key = provider_key.to_string();
+        let subject = subject.to_string();
+        let access_token = access_token.to_string();
+        let refresh_token = refresh_token.map(|s| s.to_string());
+        let expires_at = expires_at.map(|s| s.to_string());
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            use user_identities::dsl as ui;
+            diesel::update(
+                ui::user_identities
+                    .filter(ui::provider_key.eq(&provider_key))
+                    .filter(ui::subject.eq(&subject))
+            )
+            .set((
+                ui::access_token.eq(&access_token),
+                ui::refresh_token.eq(&refresh_token),
+                ui::expires_at.eq(&expires_at),
+            ))
+            .execute(&mut conn)?;
             Ok(())
         })
         .await??;

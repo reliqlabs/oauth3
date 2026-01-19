@@ -23,3 +23,7 @@ staticPasswords:
   hash: "$2b$10$0PrvgqBsWaqJPOmV8HhKSOR1kr.T7xG7OdEc7Nb0u56kPSydXk3ii"
   username: "admin"
   userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"
+
+oauth2:
+  skipApprovalScreen: true
+  responseTypes: ["code", "token", "id_token"]

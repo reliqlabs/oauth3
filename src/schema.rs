@@ -25,6 +25,9 @@ diesel::table! {
         provider_key -> Text,
         subject -> Text,
         email -> Nullable<Text>,
+        access_token -> Nullable<Text>,
+        refresh_token -> Nullable<Text>,
+        expires_at -> Nullable<Text>,
         claims -> Nullable<Text>,
         linked_at -> Text,
     }

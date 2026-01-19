@@ -1,9 +1,10 @@
 use axum::{body::Body, http::{Request, StatusCode, header}, Router};
-use tower::Service;
+use tower::ServiceExt;
 use std::process::Command;
 use std::time::Duration;
 use std::sync::Arc;
 use serial_test::serial;
+use oauth3::app::AppState;
 
 struct DockerComposeGuard;
 
@@ -53,7 +54,7 @@ async fn wait_for_dex(issuer: &str) {
     panic!("Dex failed to become ready at {}", discovery_url);
 }
 
-async fn test_app(dex_issuer: String) -> Router {
+async fn test_app_with_state(dex_issuer: String) -> (Router, AppState) {
     use oauth3::{app::{AppState, build_router}, repos, config as app_config};
     
     // Configure app to use the real Dex we just started
@@ -108,7 +109,7 @@ async fn test_app(dex_issuer: String) -> Router {
         updated_at: now.clone(),
     }).await.expect("failed to seed dex provider");
 
-    build_router(state)
+    (build_router(state.clone()), state)
 }
 
 #[tokio::test]
@@ -119,14 +120,15 @@ async fn full_dex_oidc_flow_with_docker() {
     let dex_issuer = "http://localhost:5556/dex";
     wait_for_dex(dex_issuer).await;
 
-    let mut app = test_app(dex_issuer.to_string()).await;
+    let (app, state) = test_app_with_state(dex_issuer.to_string()).await;
+    let accounts = state.accounts.clone();
 
     // Step 1: Start auth flow in our app to get state/nonce cookies
     let req = Request::builder()
         .uri("/auth/dex")
         .body(Body::empty())
         .unwrap();
-    let res = app.call(req).await.unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
 
     assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
     let location = res.headers().get(header::LOCATION).unwrap().to_str().unwrap();
@@ -267,9 +269,12 @@ async fn full_dex_oidc_flow_with_docker() {
         .body(Body::empty())
         .unwrap();
     
-    let res = app.call(callback_req).await.unwrap();
+    let res = app.clone().oneshot(callback_req).await.unwrap();
     
-    assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
+    if res.status() != StatusCode::TEMPORARY_REDIRECT {
+        let body = axum::body::to_bytes(res.into_body(), 1024).await.unwrap();
+        panic!("Callback failed with status {}. Body: {}", StatusCode::TEMPORARY_REDIRECT, String::from_utf8_lossy(&body));
+    }
     assert_eq!(res.headers().get(header::LOCATION).unwrap(), "/");
     
     let all_set_cookies: Vec<_> = res.headers().get_all(header::SET_COOKIE).iter().collect();
@@ -282,13 +287,33 @@ async fn full_dex_oidc_flow_with_docker() {
         .header(header::COOKIE, session_cookie_str)
         .body(Body::empty())
         .unwrap();
-    let res = app.call(me_req).await.unwrap();
+    let res = app.oneshot(me_req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     
     let body = axum::body::to_bytes(res.into_body(), 1024).await.unwrap();
     let user: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(user.get("user_id").is_some());
     println!("Flow complete! User: {}", user);
+
+    // Step 5: Verify Token Storage and Rotation
+    let user_id = user["user_id"].as_str().unwrap();
+    let identities = accounts.list_identities(user_id).await.unwrap();
+    let dex_identity = identities.iter().find(|i| i.provider_key == "dex").expect("dex identity not found");
+    
+    assert!(dex_identity.access_token.is_some());
+    assert!(dex_identity.refresh_token.is_some()); // Dex usually provides refresh tokens
+    let old_access_token = dex_identity.access_token.clone().unwrap();
+    println!("Initial access token: {}", old_access_token);
+
+    // Try to refresh
+    oauth3::auth::oidc::refresh_token(&state, "dex", &dex_identity.subject).await.expect("refresh token failed");
+
+    let identities_after = accounts.list_identities(user_id).await.unwrap();
+    let dex_identity_after = identities_after.iter().find(|i| i.provider_key == "dex").unwrap();
+    let new_access_token = dex_identity_after.access_token.clone().unwrap();
+    println!("New access token: {}", new_access_token);
+
+    assert_ne!(old_access_token, new_access_token);
 }
 
 #[tokio::test]

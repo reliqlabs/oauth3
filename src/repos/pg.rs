@@ -84,12 +84,42 @@ impl AccountsRepo for PgAccountsRepo {
         Ok(rows)
     }
 
+    async fn list_identities_by_subject(&self, provider_key: &str, subject: &str) -> anyhow::Result<Option<crate::models::identity::UserIdentity>> {
+        use user_identities::dsl as ui;
+        let mut conn = self.pool.get().await?;
+        let row = ui::user_identities
+            .filter(ui::provider_key.eq(provider_key))
+            .filter(ui::subject.eq(subject))
+            .first::<crate::models::identity::UserIdentity>(&mut conn)
+            .await
+            .optional()?;
+        Ok(row)
+    }
+
     async fn link_identity(&self, new_identity: NewIdentity<'_>) -> anyhow::Result<()> {
         let mut conn = self.pool.get().await?;
         diesel::insert_into(user_identities::table)
             .values(&new_identity)
             .execute(&mut conn)
             .await?;
+        Ok(())
+    }
+
+    async fn update_identity_tokens(&self, provider_key: &str, subject: &str, access_token: &str, refresh_token: Option<&str>, expires_at: Option<&str>) -> anyhow::Result<()> {
+        use user_identities::dsl as ui;
+        let mut conn = self.pool.get().await?;
+        diesel::update(
+            ui::user_identities
+                .filter(ui::provider_key.eq(provider_key))
+                .filter(ui::subject.eq(subject))
+        )
+        .set((
+            ui::access_token.eq(access_token),
+            ui::refresh_token.eq(refresh_token),
+            ui::expires_at.eq(expires_at),
+        ))
+        .execute(&mut conn)
+        .await?;
         Ok(())
     }
 
