@@ -6,3 +6,4 @@ pub mod config;
 pub mod auth;
 pub mod models;
 pub mod repos;
+pub mod attestation;

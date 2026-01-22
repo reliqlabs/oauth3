@@ -52,6 +52,11 @@ diesel_migrations = { version = "2" }
 # HTTP client (used by openidconnect/oauth2). Force rustls TLS.
 reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "gzip", "brotli", "deflate", "rustls-tls"] }
 
+# dstack attestation
+hex = "0.4"
+sha2 = "0.10"
+urlencoding = "2"
+
 [dev-dependencies]
 # Test-only; avoid compiling in production images
 serial_test = "3"
