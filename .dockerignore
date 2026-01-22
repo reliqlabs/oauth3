@@ -5,3 +5,9 @@ target/
 Dockerfile
 docker-compose.yml
 .dockerignore
+
+# Nix build artifacts
+result
+result-*
+.direnv/
+.devenv/
