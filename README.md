@@ -1,6 +1,11 @@
-### oauth3 — Axum + Diesel (async) SSO starter
+# oauth3 — Axum + Diesel (async) SSO starter
 
 Minimal Rust web server that uses Axum on Tokio, Diesel for persistence (async via `diesel-async` on Postgres; SQLite via a blocking adapter), and cookie-based sessions. Authentication is SSO-only; Google OIDC is scaffolded and ready to be wired end-to-end.
+
+## Documentation
+
+- **[TEE Attestation](docs/attestation.md)** - Phala Cloud TDX attestation integration
+- **[Reproducible Builds](docs/nix-builds.md)** - Nix-based reproducible builds for TEE verification
 
 #### Features
 - Axum 0.8 router, tracing middleware, static file serving
@@ -101,82 +106,90 @@ cargo run --no-default-features --features pg
 
 ---
 
-### Run with Docker Compose (App + Postgres) — Recommended for Local Testing
-This repository includes a Dockerfile and a docker-compose.yml to run the server alongside a Postgres database.
+### Run with Docker Compose (Full Stack) — Recommended for Local Testing
 
-Prerequisites:
+The compose stack includes:
+- **Postgres** database
+- **Dex** (local OIDC provider for testing)
+- **Phala simulator** (TEE attestation testing)
+- **oauth3** app (built with Nix for reproducibility)
+
+**Prerequisites:**
 - Docker and Docker Compose
+- Nix with flakes (see [docs/nix-builds.md](docs/nix-builds.md))
 
-Steps:
+**Steps:**
 
-1) **Configure environment variables:**
+1) **Build the Docker image:**
+   ```bash
+   # Option A: Use Dockerfile.nix (works on macOS)
+   docker build -f Dockerfile.nix -t oauth3:nix .
+
+   # Option B: Use pure Nix (Linux only)
+   nix build .#dockerImage && docker load < result
+   ```
+
+2) **Configure environment:**
    ```bash
    cp .env.example .env
    ```
 
-   Edit `.env` and set the required values:
-   - **Required for live Google OAuth:**
-     - `GOOGLE_CLIENT_ID` — from Google Cloud Console OAuth 2.0 credentials
-     - `GOOGLE_CLIENT_SECRET` — from Google Cloud Console OAuth 2.0 credentials
-   - **Required for persistent sessions:**
-     - `COOKIE_KEY_BASE64` — generate with: `head -c 64 /dev/urandom | base64`
-   - **Optional:**
-     - `AUTH_GOOGLE_MODE=live` — already set in docker-compose.yml (override in .env if needed)
+   For local testing with Dex (no external OAuth setup needed):
+   - `COOKIE_KEY_BASE64` — generate with: `head -c 64 /dev/urandom | base64`
+   - Dex credentials are pre-configured in `.env.example`
 
-   **Important:** Configure your Google OAuth 2.0 Client redirect URI as:
-   ```
-   http://localhost:8080/auth/callback/google
-   ```
-   in the Google Cloud Console (APIs & Services → Credentials → OAuth 2.0 Client IDs).
+   For live Google/GitHub OAuth (optional):
+   - Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `AUTH_GOOGLE_MODE=live`
+   - Set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `AUTH_GITHUB_MODE=live`
+   - Configure redirect URIs in provider consoles:
+     - Google: `http://localhost:8080/auth/callback/google`
+     - GitHub: `http://localhost:8080/auth/callback/github`
 
-2) **Build and start the stack:**
+3) **Start the stack:**
    ```bash
-   docker-compose build
-   docker-compose up
+   docker compose up
    ```
 
-   This starts:
-   - `db`: Postgres 16 exposed on localhost:5432
-   - `app`: the oauth3 server exposed on localhost:8080
+   Services running:
+   - `db`: Postgres at `localhost:5432`
+   - `dex`: OIDC provider at `localhost:5556`
+   - `simulator`: TEE attestation at `localhost:8090`
+   - `app`: oauth3 server at `localhost:8080`
 
-   **Database migrations run automatically on app startup** — no manual migration step needed.
-
-3) **Visit the app:**
+4) **Test the app:**
    ```
    http://localhost:8080/login
    ```
 
-   Click "Continue with Google" to test the OAuth flow.
+   - **Dex (local)**: No setup required, click "Continue with Dex"
+   - **Google/GitHub**: Requires credentials in `.env` and `AUTH_*_MODE=live`
 
-4) **View logs:**
+5) **Test TEE attestation:**
    ```bash
-   docker-compose logs -f app
+   curl http://localhost:8080/info
+   curl http://localhost:8080/attestation
    ```
 
-5) **Run migrations manually (if needed):**
-   The diesel CLI is available inside the container:
-   ```bash
-   docker-compose exec app diesel migration run
-   ```
-
-**Stopping the stack:**
+**Stopping:**
 ```bash
-docker-compose down          # Stop and remove containers
-docker-compose down -v       # Also remove the database volume (fresh start)
+docker compose down          # Stop containers
+docker compose down -v       # Also remove volumes (fresh DB)
 ```
 
 **Rebuilding after code changes:**
 ```bash
-docker-compose build --no-cache app   # Force rebuild without cache
-docker-compose up
+# Rebuild image
+docker build -f Dockerfile.nix -t oauth3:nix .
+# Restart stack
+docker compose up
 ```
 
-Notes:
-- The app container is built with the `pg` feature enabled and includes `libpq` and `diesel` CLI.
-- The app reads configuration from `.env` (via `env_file` in docker-compose.yml) and environment variables set in `docker-compose.yml`. Variables in the `environment` section override those from `.env`.
-- Migrations are executed automatically on startup via embedded migrations in the binary.
-- Sessions require a persistent `COOKIE_KEY_BASE64`; otherwise, cookies are invalidated on restart.
-- The Docker build uses layer caching to speed up rebuilds when only source code changes.
+**Notes:**
+- Migrations run automatically on app startup
+- Dex provides a local OIDC provider for testing without external OAuth setup
+- Sessions require persistent `COOKIE_KEY_BASE64`
+- See [docs/attestation.md](docs/attestation.md) for TEE attestation details
+- See [docs/nix-builds.md](docs/nix-builds.md) for reproducible build details
 
 ---
 
@@ -190,11 +203,22 @@ Required/important variables:
 - `COOKIE_KEY_BASE64` — base64-encoded 32 or 64 bytes; if 32B, it will be duplicated to 64B. If unset, a random 64B dev key is generated each run.
 - `APP_FORCE_SECURE` — `true|false` to force `Secure` cookie (defaults to false for local)
 
-OIDC placeholders (wired later):
-- `GOOGLE_CLIENT_ID`
-- `GOOGLE_CLIENT_SECRET`
+**OAuth/OIDC Providers:**
+
+Dex (local OIDC, pre-configured):
+- `DEX_CLIENT_ID`, `DEX_CLIENT_SECRET`, `DEX_ISSUER`
+- `AUTH_DEX_MODE` — `placeholder` (default) or `live`
+
+Google OIDC:
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
 - `GOOGLE_ISSUER` (default `https://accounts.google.com`)
-- `AUTH_GOOGLE_MODE` — `placeholder` (default) or `live`. Keep `placeholder` until you are ready to test with real Google.
+- `GOOGLE_SCOPES` (space-separated)
+- `AUTH_GOOGLE_MODE` — `placeholder` (default) or `live`
+
+GitHub OAuth2:
+- `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`
+- `GITHUB_SCOPES` (space-separated)
+- `AUTH_GITHUB_MODE` — `placeholder` (default) or `live`
 
 Generate a 64-byte key (recommended):
 ```
@@ -215,13 +239,19 @@ SQLite note: The app also attempts to run pending migrations on startup when bui
 ---
 
 ### Routes
+
+**Authentication:**
 - `GET /healthz` — liveness probe
 - `GET /login` — simple login page
-- `GET /auth/:provider` — start SSO flow (supports `google` placeholder)
-- `GET /auth/callback/:provider` — provider callback (placeholder creates a dev session)
+- `GET /auth/:provider` — start SSO flow (supports `google`, `github`, `dex`)
+- `GET /auth/callback/:provider` — provider callback
 - `GET /me` — returns `{ user_id }` from session when logged in
 - `POST /logout` — clears session
 - `GET /static/*` — static assets
+
+**TEE Attestation** (see [docs/attestation.md](docs/attestation.md)):
+- `GET /info` — application version and build info
+- `GET /attestation` — TDX attestation quote proving code runs in TEE
 
 ---
 
@@ -246,10 +276,26 @@ Troubleshooting builds with Postgres:
 
 ---
 
-### Notes about Google OIDC testing
-- For now, the app runs in placeholder mode and does not make outbound calls to Google.
-- To later enable live testing:
-  - Set `AUTH_GOOGLE_MODE=live` in `.env`.
-  - Ensure `APP_PUBLIC_URL` matches the origin and the redirect URI `APP_PUBLIC_URL/auth/callback/google` is configured in the Google Cloud console for your OAuth 2.0 Client.
-  - Provide valid `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_ISSUER`.
-  - Then restart the server. Handlers will switch to the live OIDC flow.
+### Testing OAuth Providers
+
+**Dex (recommended for local dev):**
+- Pre-configured in `.env.example` and `docker-compose.yml`
+- No external setup required
+- Set `AUTH_DEX_MODE=live` to enable
+- Works with `docker compose up`
+
+**Google OIDC:**
+- Create OAuth 2.0 Client in [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+- Configure redirect URI: `http://localhost:8080/auth/callback/google`
+- Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` in `.env`
+- Set `AUTH_GOOGLE_MODE=live`
+
+**GitHub OAuth:**
+- Create OAuth App in [GitHub Developer Settings](https://github.com/settings/developers)
+- Configure callback URL: `http://localhost:8080/auth/callback/github`
+- Set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` in `.env`
+- Set `AUTH_GITHUB_MODE=live`
+
+**Placeholder mode (default):**
+- Providers in `placeholder` mode show UI but create mock sessions
+- Useful for frontend testing without real OAuth setup
