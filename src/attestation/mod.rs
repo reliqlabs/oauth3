@@ -15,6 +15,8 @@ pub struct Quote {
     /// Optional event log
     #[serde(rename = "eventLog")]
     pub event_log: Option<String>,
+    #[serde(rename = "vmConfig")]
+    pub vm_config: Option<String>,
 }
 
 /// Response from dstack DeriveKey endpoint

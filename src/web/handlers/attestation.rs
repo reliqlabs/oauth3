@@ -12,6 +12,9 @@ pub struct AttestationResponse {
     /// Optional event log
     #[serde(rename = "eventLog", skip_serializing_if = "Option::is_none")]
     pub event_log: Option<String>,
+    /// Optional VM configuration
+    #[serde(rename = "vmConfig", skip_serializing_if = "Option::is_none")]
+    pub vm_config: Option<String>,
 }
 
 /// Application info response for code verification
@@ -52,6 +55,7 @@ pub async fn attestation() -> Result<impl IntoResponse, (StatusCode, String)> {
     Ok(Json(AttestationResponse {
         quote: quote.quote,
         event_log: quote.event_log,
+        vm_config: quote.vm_config,
     }))
 }
 

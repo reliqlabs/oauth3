@@ -1,4 +1,4 @@
-use axum::{routing::{get, post}, Router};
+use axum::{middleware, routing::{get, post}, Router};
 use tower_cookies::{CookieManagerLayer, Key};
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
@@ -194,6 +194,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/account/unlink/{provider}", post(crate::web::handlers::account::unlink_provider))
         .nest_service("/static", ServeDir::new("static"))
         .with_state(state)
+        .layer(middleware::from_fn(crate::web::middleware::attestation_middleware))
         .layer(CookieManagerLayer::new())
         .layer(TraceLayer::new_for_http())
 }
