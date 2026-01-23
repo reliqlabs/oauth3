@@ -1,9 +1,0 @@
-# Production configuration for Phala TEE deployment
-# Use with: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
-
-services:
-  app:
-    # Production overrides
-    environment:
-      RUST_LOG: info,oauth3=info
-    # Remove dstack-socket volume override if Phala provides it differently

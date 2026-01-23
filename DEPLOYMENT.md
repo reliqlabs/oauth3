@@ -2,80 +2,63 @@
 
 This document describes how to deploy OAuth3 to Phala's TEE infrastructure.
 
-## Deployment Options
+## Quick Start: Phala Cloud Deployment
 
-### Option 1: Phala Cloud (Recommended)
-
-Phala Cloud provides a managed TEE environment without requiring your own infrastructure.
-
-#### Prerequisites
+### Prerequisites
 - Phala Cloud account
-- Docker image built and pushed to a registry
+- Docker registry (GitHub Container Registry, Docker Hub, etc.)
 
-#### Steps
+### Steps
 
-1. **Prepare the production build**
+1. **Build and push Docker image**
 
 ```bash
-# Disable dev overrides
-mv docker-compose.override.yml docker-compose.override.yml.disabled
+# Build production image
+docker build -t ghcr.io/yourname/oauth3:latest .
 
-# Build and tag the image
-docker-compose build
-docker tag oauth3-app your-registry/oauth3:latest
-docker push your-registry/oauth3:latest
+# Push to registry
+docker push ghcr.io/yourname/oauth3:latest
 ```
 
-2. **Update docker-compose.yml for registry image**
+2. **Configure environment**
 
-Replace the `build` section with your pushed image:
+```bash
+# Copy Phala environment template
+cp .env.phala.example .env.phala
 
-```yaml
-services:
-  app:
-    image: your-registry/oauth3:latest
-    # ... rest of config
+# Edit with your values
+nano .env.phala
 ```
 
-3. **Deploy using Phala Cloud CLI**
+**Required variables in `.env.phala`:**
+```bash
+DOCKER_IMAGE=ghcr.io/yourname/oauth3:latest
+POSTGRES_PASSWORD=your-secure-password
+APP_PUBLIC_URL=https://oauth3.yourdomain.com
+COOKIE_KEY_BASE64=$(openssl rand -base64 64)
+
+# Optional: Enable OAuth providers
+AUTH_GOOGLE_MODE=live
+GOOGLE_CLIENT_ID=your-client-id
+GOOGLE_CLIENT_SECRET=your-client-secret
+```
+
+3. **Deploy to Phala Cloud**
 
 ```bash
 # Install Phala Cloud CLI
 npm install -g @phala/cloud-cli
 
-# Login to Phala Cloud
+# Login
 phala login
 
-# Create a CVM (Confidential Virtual Machine)
-phala cvms create \
-  --name oauth3-prod \
-  --compose ./docker-compose.yml \
-  --vcpu 2 \
-  --memory 4096 \
-  --diskSize 60 \
-  --teepod-id <your-teepod-id> \
-  --image dstack-dev-0.3.5 \
-  --env-file ./.env
+# Deploy using the deployment script
+./phala-deploy.sh .env.phala
 ```
 
-4. **Configure environment variables**
+The script reads all variables from `.env.phala` and passes them to the `phala cvms create` command. Optional deployment settings (TEEPOD_ID, VCPU, MEMORY, etc.) can be configured in the `.env.phala` file.
 
-Ensure your `.env` file contains production values:
-
-```bash
-DATABASE_URL=postgres://user:pass@db:5432/oauth3
-APP_PUBLIC_URL=https://your-domain.com
-COOKIE_KEY_BASE64=<your-64-byte-base64-key>
-RUST_LOG=info,oauth3=info
-
-# Provider credentials
-GOOGLE_CLIENT_ID=...
-GOOGLE_CLIENT_SECRET=...
-GITHUB_CLIENT_ID=...
-GITHUB_CLIENT_SECRET=...
-```
-
-5. **Verify deployment**
+4. **Verify deployment**
 
 ```bash
 # Check CVM status
@@ -145,15 +128,28 @@ Open `http://localhost:9080` and upload your `docker-compose.yml`
 
 Before deploying:
 
+- [ ] **CRITICAL**: Rename `docker-compose.override.yml` to `.disabled`
+- [ ] **VERIFY**: Run `docker-compose config --services` shows only `db` and `app`
 - [ ] Build and push Docker image to registry
 - [ ] Update docker-compose.yml to use registry image (not `build:`)
-- [ ] Disable or remove `docker-compose.override.yml`
 - [ ] Set production environment variables in `.env`
-- [ ] Remove `profiles: ["dev"]` services (simulator, dex)
 - [ ] Configure provider OAuth credentials (Google, GitHub, etc.)
 - [ ] Set up database backups
 - [ ] Configure domain and SSL/TLS
 - [ ] Test attestation endpoint works in TEE
+
+### Verification Commands
+
+```bash
+# Ensure override is disabled
+ls -la docker-compose.override.yml.disabled
+
+# This should output ONLY: db, app
+docker-compose config --services
+
+# This should NOT contain "simulator" or "dex"
+docker-compose config | grep -E "(simulator|dex)"
+```
 
 ## File Structure for Deployment
 

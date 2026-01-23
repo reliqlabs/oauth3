@@ -16,11 +16,9 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
-  # Phala dstack simulator for local TEE attestation testing
   simulator:
     image: phalanetwork/tappd-simulator:latest
     restart: unless-stopped
-    profiles: ["dev"]
     volumes:
       - dstack-socket:/var/run
     ports:
@@ -41,15 +39,12 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/oauth3
       RUST_LOG: info,oauth3=debug
-      # Point to dex in docker network for server-to-server calls,
-      # but browser will use localhost:5556
       DEX_ISSUER_INTERNAL: http://dex:5556/dex
     ports:
       - "8080:8080"
 
   dex:
     image: dexidp/dex:v2.41.1
-    profiles: ["dev"]
     ports:
       - "5556:5556"
     volumes:
