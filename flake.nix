@@ -81,6 +81,9 @@
             mkdir -p $out/share/oauth3
             cp -r ${src}/migrations $out/share/oauth3/
             cp ${src}/diesel.toml $out/share/oauth3/
+
+            # Make files writable so crane's postInstall can strip references
+            chmod -R u+w $out/share/oauth3
           '';
         });
 
