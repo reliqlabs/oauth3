@@ -12,20 +12,37 @@ fi
 
 echo "Reading environment from: $ENV_FILE"
 
-# Source the env file
+# Parse env file and build list of variables defined in it
+declare -A ENV_VARS
+while IFS= read -r line; do
+  # Skip comments and empty lines
+  [[ "$line" =~ ^[[:space:]]*# ]] && continue
+  [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+
+  # Remove 'export ' prefix if present
+  line="${line#export }"
+
+  # Extract variable name
+  if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]]; then
+    var_name="${BASH_REMATCH[1]}"
+    ENV_VARS[$var_name]=1
+  fi
+done < "$ENV_FILE"
+
+# Now source the file to get actual values
 set -a
 source "$ENV_FILE"
 set +a
 
-# Required variables
+# Apply defaults for variables that may not be set
+: "${POSTGRES_PASSWORD:=postgres}"
+
+# Check critical variables (no sensible defaults)
 REQUIRED_VARS=(
   "DOCKER_IMAGE"
-  "POSTGRES_PASSWORD"
-  "APP_PUBLIC_URL"
   "COOKIE_KEY_BASE64"
 )
 
-# Check required variables
 for var in "${REQUIRED_VARS[@]}"; do
   if [[ -z "${!var:-}" ]]; then
     echo "Error: Required variable $var is not set in $ENV_FILE"
@@ -33,39 +50,53 @@ for var in "${REQUIRED_VARS[@]}"; do
   fi
 done
 
+# Warn if APP_PUBLIC_URL is not set (needed for OAuth callbacks)
+if [[ -z "${APP_PUBLIC_URL:-}" ]]; then
+  echo "⚠️  WARNING: APP_PUBLIC_URL is not set"
+  echo "   OAuth providers will not work until you:"
+  echo "   1. Get the public URL from Phala after deployment"
+  echo "   2. Update APP_PUBLIC_URL environment variable"
+  echo "   3. Configure OAuth callback URLs with providers"
+  echo ""
+  # Set a placeholder
+  APP_PUBLIC_URL="http://placeholder-update-after-deployment"
+  ENV_VARS[APP_PUBLIC_URL]=1
+fi
+
 # Optional variables with defaults
 TEEPOD_ID="${TEEPOD_ID:-}"
 CVM_NAME="${CVM_NAME:-oauth3-prod}"
 VCPU="${VCPU:-2}"
 MEMORY="${MEMORY:-4096}"
 DISK_SIZE="${DISK_SIZE:-60}"
-DSTACK_IMAGE="${DSTACK_IMAGE:-dstack-dev-0.3.5}"
+DSTACK_IMAGE="${DSTACK_IMAGE:-dstack-dev-0.5.5}"
 
-# Build env args for phala command
+# Apply defaults for docker-compose variables (Phala doesn't support ${VAR:-default} syntax)
+: "${APP_BIND_ADDR:=0.0.0.0:8080}"
+: "${RUST_LOG:=info,oauth3=info}"
+
+# Mark defaults as defined
+ENV_VARS[POSTGRES_PASSWORD]=1
+ENV_VARS[APP_BIND_ADDR]=1
+ENV_VARS[RUST_LOG]=1
+ENV_VARS[DOCKER_IMAGE]=1
+
+# Build env args array - only include variables from ENV_FILE
 ENV_ARGS=()
-while IFS='=' read -r key value; do
-  # Skip comments and empty lines
-  [[ "$key" =~ ^#.*$ ]] && continue
-  [[ -z "$key" ]] && continue
-
-  # Expand variable if it starts with $
-  if [[ "$value" =~ ^\$\{?([A-Z_]+)\}?$ ]]; then
-    var_name="${BASH_REMATCH[1]}"
-    value="${!var_name:-}"
-  fi
-
-  # Add to env args
-  ENV_ARGS+=("-e" "${key}=${value}")
-done < "$ENV_FILE"
+for var in "${!ENV_VARS[@]}"; do
+  value="${!var}"
+  # Add as key=value pairs
+  ENV_ARGS+=("-e" "${var}=${value}")
+done
 
 # Build the command
 CMD=(
-  phala cvms create
+  phala deploy
   --name "$CVM_NAME"
   --compose ./docker-compose.phala.yml
   --vcpu "$VCPU"
   --memory "$MEMORY"
-  --diskSize "$DISK_SIZE"
+  --disk-size "$DISK_SIZE"
   --image "$DSTACK_IMAGE"
 )
 
@@ -79,8 +110,8 @@ CMD+=("${ENV_ARGS[@]}")
 
 # Print the command
 echo ""
-echo "Running deployment command:"
-echo "${CMD[@]}"
+echo "Running deployment command with ${#ENV_ARGS[@]} environment variables"
+echo "Command: ${CMD[@]}"
 echo ""
 
 # Confirm before running

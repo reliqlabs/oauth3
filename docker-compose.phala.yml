@@ -15,31 +15,22 @@ services:
       - pgdata:/var/lib/postgresql/data
 
   app:
-    image: ${DOCKER_IMAGE:-oauth3:latest}
+    image: ${DOCKER_IMAGE}
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      # Mount dstack socket for TEE operations
+      - /var/run/dstack.sock:/var/run/dstack.sock
     environment:
       DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/oauth3
+      APP_BIND_ADDR: ${APP_BIND_ADDR:-0.0.0.0:8080}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL}
       COOKIE_KEY_BASE64: ${COOKIE_KEY_BASE64}
       RUST_LOG: ${RUST_LOG:-info,oauth3=info}
-
-      # Google OAuth
-      AUTH_GOOGLE_MODE: ${AUTH_GOOGLE_MODE:-placeholder}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      GOOGLE_ISSUER: ${GOOGLE_ISSUER:-https://accounts.google.com}
-      GOOGLE_SCOPES: ${GOOGLE_SCOPES:-openid profile email}
-
-      # GitHub OAuth
-      AUTH_GITHUB_MODE: ${AUTH_GITHUB_MODE:-placeholder}
-      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
-      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
-      GITHUB_SCOPES: ${GITHUB_SCOPES:-read:user user:email}
     ports:
-      - "${APP_PORT:-8080}:8080"
+      - "8080:8080"
 
 volumes:
   pgdata:

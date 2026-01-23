@@ -34,14 +34,24 @@ nano .env.phala
 ```bash
 DOCKER_IMAGE=ghcr.io/yourname/oauth3:latest
 POSTGRES_PASSWORD=your-secure-password
-APP_PUBLIC_URL=https://oauth3.yourdomain.com
 COOKIE_KEY_BASE64=$(openssl rand -base64 64)
 
-# Optional: Enable OAuth providers
+# APP_PUBLIC_URL - can be set after deployment when you know the URL
+# For initial deployment, you can leave this unset or use a placeholder
+APP_PUBLIC_URL=https://your-cvm-url.phala.network
+
+# Optional: Enable OAuth providers (requires APP_PUBLIC_URL to be set)
 AUTH_GOOGLE_MODE=live
 GOOGLE_CLIENT_ID=your-client-id
 GOOGLE_CLIENT_SECRET=your-client-secret
 ```
+
+**Note on APP_PUBLIC_URL:**
+- You won't know your public URL until after deployment
+- The script will deploy with a placeholder if not set
+- After deployment, get your URL from `phala cvms list`
+- Update the environment variable with `phala cvms update`
+- Configure OAuth callback URLs with providers using the Phala URL
 
 3. **Deploy to Phala Cloud**
 

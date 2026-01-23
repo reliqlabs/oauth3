@@ -93,6 +93,7 @@ async fn test_app_with_state(dex_issuer: String) -> (Router, AppState) {
     // Explicitly seed the dex provider for the test
     use oauth3::models::provider::Provider;
     let now = "2026-01-15T00:00:00Z".to_string();
+    let api_base = dex_issuer.strip_suffix("/dex").unwrap_or(&dex_issuer).to_string();
     accounts.save_provider(Provider {
         id: "dex".into(),
         name: "Dex".into(),
@@ -108,6 +109,7 @@ async fn test_app_with_state(dex_issuer: String) -> (Router, AppState) {
         is_enabled: 1,
         created_at: now.clone(),
         updated_at: now.clone(),
+        api_base_url: Some(api_base),
     }).await.expect("failed to seed dex provider");
 
     (build_router(state.clone()), state)

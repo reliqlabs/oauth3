@@ -1,6 +1,7 @@
 use axum::{body::Body, http::{Request, StatusCode}};
-use tower::ServiceExt; // for `oneshot`
+use tower::{Service, ServiceExt}; // for `call` and `oneshot`
 use rand::RngCore;
+use base64::Engine;
 
 // Build a test app router backed by a temporary SQLite database.
 async fn test_app() -> axum::Router {
@@ -8,7 +9,9 @@ async fn test_app() -> axum::Router {
     use oauth3::db::sqlite::make_pool;
 
     // Force placeholder mode for deterministic tests (no outbound calls)
-    std::env::set_var("AUTH_GOOGLE_MODE", "placeholder");
+    std::env::set_var("PROVIDER_GOOGLE_TYPE", "oidc");
+    std::env::set_var("PROVIDER_GOOGLE_MODE", "placeholder");
+    std::env::set_var("PROVIDER_GOOGLE_ISSUER", "https://accounts.google.com");
 
     // Use in-memory sqlite for tests
     let db_path = "sqlite://:memory:".to_string();
@@ -44,13 +47,34 @@ async fn test_app() -> axum::Router {
     let state = AppState {
         config: cfg.clone(),
         cookie_key,
-        accounts,
+        accounts: accounts.clone(),
         oidc: oauth3::auth::oidc::OidcSettings::from_config(&cfg).expect("oidc settings"),
-        #[cfg(feature = "sqlite")] 
+        #[cfg(feature = "sqlite")]
         sqlite: sqlite_pool,
         #[cfg(feature = "pg")]
         pg: oauth3::db::pg::make_pool("").await.unwrap(), // unused under sqlite feature
     };
+
+    // Seed Google provider from PROVIDER_* env vars
+    use oauth3::models::provider::Provider;
+    let now = time::OffsetDateTime::now_utc().to_string();
+    accounts.save_provider(Provider {
+        id: "google".into(),
+        name: "Google".into(),
+        provider_type: "oidc".into(),
+        mode: "placeholder".into(),
+        client_id: None,
+        client_secret: None,
+        issuer: Some("https://accounts.google.com".into()),
+        auth_url: None,
+        token_url: None,
+        scopes: None,
+        redirect_path: "/auth/callback/google".into(),
+        is_enabled: 1,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+        api_base_url: Some("https://www.googleapis.com".into()),
+    }).await.expect("save provider");
 
     build_router(state)
 }
@@ -77,14 +101,12 @@ async fn login_page_loads() {
 
 #[tokio::test]
 async fn placeholder_auth_sets_session_and_me_works() {
-    let mut app = test_app().await;
+    let app = test_app().await;
 
     // Call the placeholder callback which issues a session cookie
     let resp = app
-        .ready()
-        .await
-        .unwrap()
-        .call(Request::builder().uri("/auth/callback/google").body(Body::empty()).unwrap())
+        .clone()
+        .oneshot(Request::builder().uri("/auth/callback/google").body(Body::empty()).unwrap())
         .await
         .unwrap();
 
@@ -98,6 +120,6 @@ async fn placeholder_auth_sets_session_and_me_works() {
         .header(axum::http::header::COOKIE, set_cookie.unwrap())
         .body(Body::empty())
         .unwrap();
-    let res = app.ready().await.unwrap().call(req).await.unwrap();
+    let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 }

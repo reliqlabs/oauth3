@@ -105,78 +105,73 @@ pub async fn run() -> anyhow::Result<()> {
 
 async fn seed_providers_from_env(state: &AppState) -> anyhow::Result<()> {
     use crate::models::provider::Provider;
+    use std::collections::HashMap;
     let now = time::OffsetDateTime::now_utc().to_string();
 
-    // Helper to get env with default
-    let get_env = |k: &str, default: &str| std::env::var(k).unwrap_or_else(|_| default.to_string());
+    // Collect all PROVIDER_* env vars and group by provider ID
+    let mut providers: HashMap<String, HashMap<String, String>> = HashMap::new();
 
-    // 1. Google
-    if state.accounts.get_provider("google").await?.is_none() {
-        let mode = get_env("AUTH_GOOGLE_MODE", "placeholder");
-        state.accounts.save_provider(Provider {
-            id: "google".into(),
-            name: "Google".into(),
-            provider_type: "oidc".into(),
-            mode,
-            client_id: std::env::var("GOOGLE_CLIENT_ID").ok(),
-            client_secret: std::env::var("GOOGLE_CLIENT_SECRET").ok(),
-            issuer: Some(get_env("GOOGLE_ISSUER", "https://accounts.google.com")),
-            auth_url: None,
-            token_url: None,
-            scopes: std::env::var("GOOGLE_SCOPES").ok(),
-            redirect_path: "/auth/callback/google".into(),
-            is_enabled: 1,
-            created_at: now.clone(),
-            updated_at: now.clone(),
-            api_base_url: Some("https://www.googleapis.com".into()),
-        }).await?;
+    for (key, value) in std::env::vars() {
+        if let Some(rest) = key.strip_prefix("PROVIDER_") {
+            // Format: PROVIDER_<ID>_<FIELD>
+            if let Some((provider_id, field)) = rest.split_once('_') {
+                let provider_id = provider_id.to_lowercase();
+                providers.entry(provider_id)
+                    .or_insert_with(HashMap::new)
+                    .insert(field.to_lowercase(), value);
+            }
+        }
     }
 
-    // 2. GitHub
-    if state.accounts.get_provider("github").await?.is_none() {
-        let mode = get_env("AUTH_GITHUB_MODE", "placeholder");
-        state.accounts.save_provider(Provider {
-            id: "github".into(),
-            name: "GitHub".into(),
-            provider_type: "oauth2".into(),
-            mode,
-            client_id: std::env::var("GITHUB_CLIENT_ID").ok(),
-            client_secret: std::env::var("GITHUB_CLIENT_SECRET").ok(),
-            issuer: None,
-            auth_url: Some("https://github.com/login/oauth/authorize".into()),
-            token_url: Some("https://github.com/login/oauth/access_token".into()),
-            scopes: std::env::var("GITHUB_SCOPES").ok(),
-            redirect_path: "/auth/callback/github".into(),
-            is_enabled: 1,
-            created_at: now.clone(),
-            updated_at: now.clone(),
-            api_base_url: Some("https://api.github.com".into()),
-        }).await?;
-    }
+    tracing::info!("Found {} provider(s) in environment", providers.len());
 
-    // 3. Dex
-    if state.accounts.get_provider("dex").await?.is_none() {
-        let mode = get_env("AUTH_DEX_MODE", "placeholder");
-        let issuer = get_env("DEX_ISSUER", "http://localhost:5556/dex");
-        // For Dex, derive API base URL from issuer (strip /dex path)
-        let api_base = issuer.strip_suffix("/dex").unwrap_or(&issuer).to_string();
-        state.accounts.save_provider(Provider {
-            id: "dex".into(),
-            name: "Dex".into(),
-            provider_type: "oidc".into(),
+    // Process each discovered provider
+    for (provider_id, fields) in providers {
+        // Skip if already exists in DB
+        if state.accounts.get_provider(&provider_id).await?.is_some() {
+            tracing::debug!("Provider '{}' already exists, skipping", provider_id);
+            continue;
+        }
+
+        // Required fields
+        let Some(provider_type) = fields.get("type") else {
+            tracing::warn!("Provider '{}' missing TYPE field, skipping", provider_id);
+            continue;
+        };
+
+        // Build provider from env vars
+        let name = fields.get("name")
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| provider_id.to_uppercase());
+
+        let mode = fields.get("mode")
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "placeholder".to_string());
+
+        let provider = Provider {
+            id: provider_id.clone(),
+            name,
+            provider_type: provider_type.clone(),
             mode,
-            client_id: std::env::var("DEX_CLIENT_ID").ok(),
-            client_secret: std::env::var("DEX_CLIENT_SECRET").ok(),
-            issuer: Some(issuer),
-            auth_url: None,
-            token_url: None,
-            scopes: std::env::var("DEX_SCOPES").ok(),
-            redirect_path: "/auth/callback/dex".into(),
-            is_enabled: 1,
+            client_id: fields.get("client_id").cloned(),
+            client_secret: fields.get("client_secret").cloned(),
+            issuer: fields.get("issuer").cloned(),
+            auth_url: fields.get("auth_url").cloned(),
+            token_url: fields.get("token_url").cloned(),
+            scopes: fields.get("scopes").cloned(),
+            redirect_path: fields.get("redirect_path")
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("/auth/callback/{}", provider_id)),
+            is_enabled: fields.get("enabled")
+                .and_then(|s| s.parse::<i32>().ok())
+                .unwrap_or(1),
             created_at: now.clone(),
             updated_at: now.clone(),
-            api_base_url: Some(api_base),
-        }).await?;
+            api_base_url: fields.get("api_base_url").cloned(),
+        };
+
+        tracing::info!("Seeding provider '{}' ({})", provider.id, provider.name);
+        state.accounts.save_provider(provider).await?;
     }
 
     Ok(())
