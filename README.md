@@ -1,27 +1,30 @@
-# oauth3 — Axum + Diesel (async) SSO starter
+# oauth3 — OAuth Proxy with TEE Attestation
 
-Minimal Rust web server that uses Axum on Tokio, Diesel for persistence (async via `diesel-async` on Postgres; SQLite via a blocking adapter), and cookie-based sessions. Authentication is SSO-only; Google OIDC is scaffolded and ready to be wired end-to-end.
+Rust web service that provides OAuth/OIDC authentication and proxies authenticated requests to provider APIs (Google, GitHub, etc.) with optional TEE (Trusted Execution Environment) attestation. Built with Axum, Diesel (async Postgres/blocking SQLite), and designed for deployment on Phala Cloud's TDX infrastructure.
+
+## Key Features
+
+- **OAuth Proxy** - Authenticated proxy to provider APIs (Google, GitHub, etc.)
+- **TEE Attestation** - Optional TDX attestation for requests in trusted execution environments
+- **Multi-Provider SSO** - Google OIDC, GitHub OAuth2, Dex (local testing)
+- **API Key Authentication** - Bearer token support for external apps (scope-limited, soft-delete)
+- **Account Management** - Link/unlink OAuth providers, manage API keys
+- **Reproducible Builds** - Nix-based builds for TEE verification
+- **Dual Database Support** - Async Postgres (production) or blocking SQLite (dev)
 
 ## Documentation
 
 - **[TEE Attestation](docs/attestation.md)** - Phala Cloud TDX attestation integration
-- **[Reproducible Builds](docs/nix-builds.md)** - Nix-based reproducible builds for TEE verification
+- **[Reproducible Builds](docs/nix-builds.md)** - Nix-based reproducible builds
+- **[Deployment](DEPLOYMENT.md)** - Phala Cloud and self-hosted deployment
 
-#### Features
-- Axum 0.8 router, tracing middleware, static file serving
-- Diesel schema and migrations (`users`, `user_identities`)
-- Async DB layer
-  - Postgres: `diesel-async` + `bb8` pool (fully async)
-  - SQLite: `r2d2` pool with `spawn_blocking` adapter (temporary until switching to Postgres)
-- Cookie sessions with signing + encryption (`tower-cookies`)
-- Simple login page with provider links
-
-#### Stack
+## Stack
 - Runtime: Tokio
-- Web: Axum 0.8, tower-http 0.6, tracing
-- DB: Diesel 2.x, diesel-async 0.5 (pg), r2d2 (sqlite)
-- Migrations: diesel_migrations + Diesel CLI
-- Auth: openidconnect (OIDC), oauth2 (for non-OIDC providers, later)
+- Web: Axum 0.8, tower-http, tower-cookies
+- DB: Diesel 2.x + diesel-async (Postgres) / r2d2 (SQLite)
+- Auth: openidconnect, oauth2
+- Attestation: dstack (Phala TEE)
+- Build: Nix flakes + crane
 
 ---
 
@@ -240,39 +243,127 @@ SQLite note: The app also attempts to run pending migrations on startup when bui
 
 ### Routes
 
+**OAuth Proxy:**
+- `ANY /proxy/{provider}/{path}` — Authenticated proxy to provider APIs
+  - Requires session cookie or `Authorization: Bearer <api_key>` header
+  - Optional `?attest=true` for TEE attestation
+  - Examples:
+    - `GET /proxy/google/oauth2/v2/userinfo`
+    - `GET /proxy/google/calendar/v3/calendars/primary/events`
+    - `GET /proxy/github/user`
+
 **Authentication:**
+- `GET /` — landing page
 - `GET /healthz` — liveness probe
-- `GET /login` — simple login page
-- `GET /auth/:provider` — start SSO flow (supports `google`, `github`, `dex`)
-- `GET /auth/callback/:provider` — provider callback
-- `GET /me` — returns `{ user_id }` from session when logged in
-- `POST /logout` — clears session
-- `GET /static/*` — static assets
+- `GET /login` — login page with provider options
+- `GET /account` — account management (link providers, API keys)
+- `GET /auth/{provider}` — start OAuth flow (google, github, dex)
+- `GET /auth/callback/{provider}` — OAuth callback
+- `GET /me` — current user info from session
+- `POST /logout` — clear session
+
+**Account Management:**
+- `GET /account/linked-identities` — list linked OAuth providers
+- `POST /account/link/{provider}` — link additional provider
+- `POST /account/unlink/{provider}` — unlink provider
+- `GET /providers` — list available OAuth providers
+
+**API Keys:**
+- `GET /account/api-keys` — list user's API keys
+- `POST /account/api-keys` — create new API key
+- `DELETE /account/api-keys/{key_id}` — soft-delete API key
 
 **TEE Attestation** (see [docs/attestation.md](docs/attestation.md)):
 - `GET /info` — application version and build info
-- `GET /attestation` — TDX attestation quote proving code runs in TEE
+- `GET /attestation` — TDX attestation quote
+
+**Static Assets:**
+- `GET /static/*` — CSS, JS, images
 
 ---
 
-### Development tips
-- Default cargo feature is `sqlite`. Use `--no-default-features --features pg` for Postgres.
-- Logs are controlled by `RUST_LOG`, e.g. `RUST_LOG=info,oauth3=debug`.
-- The OIDC flow will require real credentials and redirect URIs configured with the provider.
+### API Key Authentication
 
-Troubleshooting builds with Postgres:
-- Error like `ld: library 'pq' not found` on macOS means libpq isn’t installed or discoverable. See the libpq installation section above.
+For external applications (non-browser), use API keys instead of session cookies:
+
+**Creating API Keys:**
+
+1. Log in via browser and visit `/account`
+2. Create a new API key (copy it immediately - shown only once)
+3. Use in external apps with `Authorization: Bearer oak_...` header
+
+**Example Usage:**
+
+```bash
+# Using curl
+curl https://your-domain.com/proxy/google/oauth2/v2/userinfo \
+  -H 'Authorization: Bearer oak_YOUR_API_KEY_HERE'
+
+# With attestation
+curl 'https://your-domain.com/proxy/google/oauth2/v2/userinfo?attest=true' \
+  -H 'Authorization: Bearer oak_YOUR_API_KEY_HERE'
+```
+
+**Security:**
+- Keys are hashed (SHA-256) before storage
+- Soft-deleted (never reused)
+- Scope-limited (proxy only, cannot create new keys)
+- Last-used tracking
+
+---
+
+### Deployment
+
+**Local Development:**
+```bash
+docker compose up  # All services (db, dex, simulator, app)
+```
+
+**Phala Cloud:**
+```bash
+# Configure .env.phala
+cp .env.phala.example .env.phala
+nano .env.phala
+
+# Build and push image
+nix build .#dockerImage
+docker load < result
+docker tag oauth3:nix ghcr.io/yourname/oauth3:latest
+docker push ghcr.io/yourname/oauth3:latest
+
+# Deploy
+./phala-deploy.sh .env.phala
+```
+
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for complete instructions.
+
+**GitHub Actions:**
+
+The repository includes a workflow that automatically builds and publishes Docker images to GHCR on push to main or tag creation. Images are built with Nix for reproducibility.
+
+---
+
+### Development Tips
+
+- Default cargo feature is `sqlite`. Use `--no-default-features --features pg` for Postgres
+- Logs: `RUST_LOG=info,oauth3=debug`
+- OAuth requires real credentials and configured redirect URIs
+- Migrations run automatically on startup
+- Session persistence requires stable `COOKIE_KEY_BASE64`
+
+**Troubleshooting Postgres builds:**
+- `ld: library 'pq' not found` → install libpq (see Quickstart section)
 
 ---
 
 ### Roadmap
-- **Encryption at Rest**: Implement AEAD (e.g., AES-GCM) encryption for `access_token` and `refresh_token` columns.
-- **Automated Token Refresh Middleware**: Create an Axum extractor or middleware to automatically refresh tokens before expiry.
-- **Background Cleanup**: Implement a background task to periodically clean up expired or revoked tokens/identities.
-- **Token Revocation Support**: Add support for OIDC/OAuth2 revocation endpoints during logout or unlinking.
-- **Configuration Externalization**: Move provider definitions into an external configuration file or management UI.
-- **UI/UX Improvements**: Dynamic login page rendering and improved error feedback.
-- **Observability**: Structured logging with trace IDs and authentication metrics.
+
+- **Token Refresh**: Automatic token refresh in proxy endpoint
+- **Encryption at Rest**: AEAD encryption for stored tokens
+- **Background Cleanup**: Periodic cleanup of expired tokens/identities
+- **Token Revocation**: Support for provider revocation endpoints
+- **Provider UI**: Web interface for managing provider configurations
+- **Observability**: Structured logging, metrics, trace IDs
 
 ---
 
