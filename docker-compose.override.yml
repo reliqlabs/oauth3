@@ -1,0 +1,9 @@
+# Local development overrides
+# This file is automatically loaded by docker-compose
+# Rename to .override.yml.disabled to disable for production builds
+
+services:
+  app:
+    environment:
+      # Point to dex in docker network for server-to-server calls
+      DEX_ISSUER_INTERNAL: http://dex:5556/dex

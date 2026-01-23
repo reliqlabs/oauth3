@@ -20,6 +20,7 @@ services:
   simulator:
     image: phalanetwork/tappd-simulator:latest
     restart: unless-stopped
+    profiles: ["dev"]
     volumes:
       - dstack-socket:/var/run
     ports:
@@ -35,10 +36,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      dex:
-        condition: service_started
-      simulator:
-        condition: service_started
     env_file:
       - .env
     environment:
@@ -52,6 +49,7 @@ services:
 
   dex:
     image: dexidp/dex:v2.41.1
+    profiles: ["dev"]
     ports:
       - "5556:5556"
     volumes:

@@ -4,7 +4,13 @@ target/
 *.md
 Dockerfile
 docker-compose.yml
+docker-compose.override.yml
+docker-compose.prod.yml
 .dockerignore
+
+# Development files
+dex-config.yaml
+tests/
 
 # Nix build artifacts
 result
