@@ -51,20 +51,87 @@
     </section>
 
     <section>
+      <h2>API Proxy</h2>
+      <p>Test the OAuth proxy endpoint by making authenticated requests to provider APIs.</p>
+      <div style="display: flex; gap: 12px; margin-top: 12px;">
+        <select id="proxyProvider" style="padding: 8px; border: 1px solid #ddd; border-radius: 8px;">
+          <option value="">Select provider...</option>
+        </select>
+        <input id="proxyPath" type="text" placeholder="API path (e.g., userinfo)"
+               style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 8px;" />
+        <button onclick="testProxy()" style="background: #007aff; color: white; border-color: #007aff;">Send Request</button>
+      </div>
+      <div style="margin-top: 12px;">
+        <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+          <input type="checkbox" id="attestEnabled" style="width: 16px; height: 16px;" />
+          <span>Request TEE attestation (adds <code style="background: #f5f5f5; padding: 2px 6px; border-radius: 4px;">?attest=true</code>)</span>
+        </label>
+      </div>
+      <div id="proxyResult" style="margin-top: 12px; display: none;">
+        <strong>Response:</strong>
+        <pre style="background: #f5f5f5; padding: 12px; border-radius: 8px; overflow-x: auto; margin-top: 8px;"></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>API Keys</h2>
+      <p>Create API keys to access the proxy endpoint programmatically from your own applications.</p>
+
+      <div style="margin-top: 12px;">
+        <button onclick="showCreateKeyModal()" style="background: #34c759; color: white; border-color: #34c759;">Create API Key</button>
+      </div>
+
+      <table style="margin-top: 16px;">
+        <thead>
+          <tr><th>Name</th><th>Scopes</th><th>Created</th><th>Last Used</th><th></th></tr>
+        </thead>
+        <tbody id="apiKeys">
+          <tr><td colspan="5">Loading…</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
       <form method="post" action="/logout">
         <button type="submit">Log out</button>
       </form>
     </section>
   </main>
 
+  <!-- Create API Key Modal -->
+  <div id="createKeyModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
+    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 24px; border-radius: 12px; min-width: 400px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+      <h3 style="margin-top: 0;">Create API Key</h3>
+      <input id="keyName" type="text" placeholder="Key name (e.g., 'My App')" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 12px;" />
+      <div style="display: flex; gap: 12px;">
+        <button onclick="createApiKey()" style="flex: 1; background: #34c759; color: white; border-color: #34c759;">Create</button>
+        <button onclick="hideCreateKeyModal()" style="flex: 1;">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Show API Key Modal -->
+  <div id="showKeyModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
+    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 24px; border-radius: 12px; min-width: 500px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+      <h3 style="margin-top: 0;">API Key Created</h3>
+      <p style="color: #ff9500; font-weight: 500;">⚠️ Copy this key now. It won't be shown again.</p>
+      <div style="background: #f5f5f5; padding: 12px; border-radius: 8px; font-family: monospace; word-break: break-all; margin-bottom: 12px;" id="newApiKey"></div>
+      <button onclick="copyApiKey()" style="width: 100%; background: #007aff; color: white; border-color: #007aff; margin-bottom: 8px;">Copy to Clipboard</button>
+      <button onclick="hideShowKeyModal()" style="width: 100%;">Close</button>
+    </div>
+  </div>
+
   <script>
+    let linkedProviders = [];
+
     async function loadIdentities() {
       try {
         const res = await fetch('/account/linked-identities', { credentials: 'include' });
         const tbl = document.getElementById('identities');
         if (!res.ok) { tbl.innerHTML = '<tr><td colspan="5">Not authenticated</td></tr>'; return; }
         const data = await res.json();
-        const rows = (data.items || []).map(it => `
+        linkedProviders = data.items || [];
+        const rows = linkedProviders.map(it => `
           <tr>
             <td>${it.provider_key}</td>
             <td>${it.subject}</td>
@@ -77,11 +144,171 @@
             </td>
           </tr>`).join('');
         tbl.innerHTML = rows || '<tr><td colspan="5">No identities linked</td></tr>';
+
+        // Populate proxy provider dropdown
+        const select = document.getElementById('proxyProvider');
+        select.innerHTML = '<option value="">Select provider...</option>' +
+          linkedProviders.map(it => `<option value="${it.provider_key}">${it.provider_key}</option>`).join('');
       } catch (e) {
         document.getElementById('identities').innerHTML = '<tr><td colspan="5">Failed to load</td></tr>';
       }
     }
+
+    async function testProxy() {
+      const provider = document.getElementById('proxyProvider').value;
+      const path = document.getElementById('proxyPath').value.trim();
+      const attestEnabled = document.getElementById('attestEnabled').checked;
+      const resultDiv = document.getElementById('proxyResult');
+      const resultPre = resultDiv.querySelector('pre');
+
+      if (!provider) {
+        alert('Please select a provider');
+        return;
+      }
+      if (!path) {
+        alert('Please enter an API path');
+        return;
+      }
+
+      resultDiv.style.display = 'block';
+      resultPre.textContent = 'Loading...';
+
+      try {
+        let url = `/proxy/${provider}/${path}`;
+        if (attestEnabled) {
+          url += (path.includes('?') ? '&' : '?') + 'attest=true';
+        }
+
+        const res = await fetch(url, { credentials: 'include' });
+        const contentType = res.headers.get('content-type');
+        let body;
+
+        if (contentType && contentType.includes('application/json')) {
+          body = await res.json();
+          resultPre.textContent = JSON.stringify(body, null, 2);
+        } else {
+          body = await res.text();
+          resultPre.textContent = body;
+        }
+
+        if (!res.ok) {
+          resultPre.style.color = '#d00';
+        } else {
+          resultPre.style.color = '';
+        }
+      } catch (e) {
+        resultPre.textContent = 'Error: ' + e.message;
+        resultPre.style.color = '#d00';
+      }
+    }
+
+    async function loadApiKeys() {
+      try {
+        const res = await fetch('/account/api-keys', { credentials: 'include' });
+        const tbl = document.getElementById('apiKeys');
+        if (!res.ok) { tbl.innerHTML = '<tr><td colspan="5">Failed to load</td></tr>'; return; }
+        const data = await res.json();
+        const rows = (data.items || []).map(it => `
+          <tr>
+            <td>${it.name}</td>
+            <td>${it.scopes}</td>
+            <td>${new Date(it.created_at).toLocaleDateString()}</td>
+            <td>${it.last_used_at ? new Date(it.last_used_at).toLocaleDateString() : 'Never'}</td>
+            <td>
+              <button onclick="deleteApiKey('${it.id}', '${it.name}')" style="background: #ff3b30; color: white; border-color: #ff3b30;">Delete</button>
+            </td>
+          </tr>`).join('');
+        tbl.innerHTML = rows || '<tr><td colspan="5">No API keys</td></tr>';
+      } catch (e) {
+        document.getElementById('apiKeys').innerHTML = '<tr><td colspan="5">Failed to load</td></tr>';
+      }
+    }
+
+    function showCreateKeyModal() {
+      document.getElementById('createKeyModal').style.display = 'block';
+      document.getElementById('keyName').value = '';
+    }
+
+    function hideCreateKeyModal() {
+      document.getElementById('createKeyModal').style.display = 'none';
+    }
+
+    function hideShowKeyModal() {
+      document.getElementById('showKeyModal').style.display = 'none';
+      loadApiKeys();
+    }
+
+    async function createApiKey() {
+      const name = document.getElementById('keyName').value.trim();
+      if (!name) {
+        alert('Please enter a key name');
+        return;
+      }
+
+      try {
+        const res = await fetch('/account/api-keys', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name })
+        });
+
+        if (!res.ok) {
+          alert('Failed to create API key');
+          return;
+        }
+
+        const data = await res.json();
+        hideCreateKeyModal();
+
+        // Show the new key
+        document.getElementById('newApiKey').textContent = data.key;
+        document.getElementById('showKeyModal').style.display = 'block';
+      } catch (e) {
+        alert('Error creating API key: ' + e.message);
+      }
+    }
+
+    async function deleteApiKey(id, name) {
+      if (!confirm(`Delete API key "${name}"? This cannot be undone.`)) {
+        return;
+      }
+
+      try {
+        const res = await fetch(`/account/api-keys/${id}`, {
+          method: 'DELETE',
+          credentials: 'include'
+        });
+
+        if (res.ok) {
+          loadApiKeys();
+        } else {
+          alert('Failed to delete API key');
+        }
+      } catch (e) {
+        alert('Error deleting API key: ' + e.message);
+      }
+    }
+
+    async function copyApiKey() {
+      const key = document.getElementById('newApiKey').textContent;
+      try {
+        await navigator.clipboard.writeText(key);
+        alert('API key copied to clipboard!');
+      } catch (e) {
+        // Fallback for older browsers
+        const textarea = document.createElement('textarea');
+        textarea.value = key;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        alert('API key copied to clipboard!');
+      }
+    }
+
     loadIdentities();
+    loadApiKeys();
   </script>
 </body>
 </html>

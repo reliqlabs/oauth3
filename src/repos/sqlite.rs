@@ -8,9 +8,10 @@ use crate::models::{
     identity::{NewIdentity, UserIdentity},
     user::{NewUser, User},
     provider::Provider,
+    api_key::ApiKey,
 };
 use crate::repos::AccountsRepo;
-use crate::schema::{user_identities, users, oauth_providers};
+use crate::schema::{user_identities, users, oauth_providers, api_keys};
 
 pub struct SqliteAccountsRepo {
     pool: crate::db::sqlite::SqlitePool,
@@ -121,6 +122,24 @@ impl AccountsRepo for SqliteAccountsRepo {
             let row = ui::user_identities
                 .filter(ui::provider_key.eq(&provider_key))
                 .filter(ui::subject.eq(&subject))
+                .first::<UserIdentity>(&mut conn)
+                .optional()?;
+            Ok(row)
+        })
+        .await?;
+        res
+    }
+
+    async fn get_user_identity(&self, user_id: &str, provider_key: &str) -> anyhow::Result<Option<UserIdentity>> {
+        let user_id = user_id.to_string();
+        let provider_key = provider_key.to_string();
+        let pool = self.pool.clone();
+        let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<UserIdentity>> {
+            let mut conn = pool.get()?;
+            use user_identities::dsl as ui;
+            let row = ui::user_identities
+                .filter(ui::user_id.eq(&user_id))
+                .filter(ui::provider_key.eq(&provider_key))
                 .first::<UserIdentity>(&mut conn)
                 .optional()?;
             Ok(row)
@@ -269,6 +288,86 @@ impl AccountsRepo for SqliteAccountsRepo {
                 .do_update()
                 .set(&provider)
                 .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn create_api_key(&self, api_key: ApiKey) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            diesel::insert_into(api_keys::table)
+                .values(&api_key)
+                .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn list_api_keys(&self, user_id: &str) -> anyhow::Result<Vec<ApiKey>> {
+        let user_id = user_id.to_string();
+        let pool = self.pool.clone();
+        let keys = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<ApiKey>> {
+            let mut conn = pool.get()?;
+            let rows = api_keys::table
+                .filter(api_keys::user_id.eq(&user_id))
+                .filter(api_keys::deleted_at.is_null())
+                .order(api_keys::created_at.desc())
+                .load::<ApiKey>(&mut conn)?;
+            Ok(rows)
+        })
+        .await??;
+        Ok(keys)
+    }
+
+    async fn get_api_key_by_hash(&self, key_hash: &str) -> anyhow::Result<Option<ApiKey>> {
+        let key_hash = key_hash.to_string();
+        let pool = self.pool.clone();
+        let key = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<ApiKey>> {
+            let mut conn = pool.get()?;
+            let k = api_keys::table
+                .filter(api_keys::key_hash.eq(&key_hash))
+                .filter(api_keys::deleted_at.is_null())
+                .first::<ApiKey>(&mut conn)
+                .optional()?;
+            Ok(k)
+        })
+        .await??;
+        Ok(key)
+    }
+
+    async fn update_api_key_last_used(&self, id: &str) -> anyhow::Result<()> {
+        let id = id.to_string();
+        let pool = self.pool.clone();
+        let now = time::OffsetDateTime::now_utc().to_string();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            diesel::update(api_keys::table.find(&id))
+                .set(api_keys::last_used_at.eq(&now))
+                .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn soft_delete_api_key(&self, id: &str, user_id: &str) -> anyhow::Result<()> {
+        let id = id.to_string();
+        let user_id = user_id.to_string();
+        let pool = self.pool.clone();
+        let now = time::OffsetDateTime::now_utc().to_string();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            diesel::update(
+                api_keys::table
+                    .filter(api_keys::id.eq(&id))
+                    .filter(api_keys::user_id.eq(&user_id))
+            )
+            .set(api_keys::deleted_at.eq(&now))
+            .execute(&mut conn)?;
             Ok(())
         })
         .await??;

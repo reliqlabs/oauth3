@@ -26,8 +26,9 @@ services:
       - "8090:8090"
 
   app:
-    # Use pure Nix-built image (build with: nix build .#dockerImage && docker load < result)
-    image: oauth3:nix
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
     volumes:
       - dstack-socket:/var/run

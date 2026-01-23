@@ -3,9 +3,8 @@ use axum::{
     extract::Request,
     http::StatusCode,
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::Response,
 };
-use bytes::Bytes;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 

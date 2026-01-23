@@ -10,9 +10,10 @@ use crate::models::{
     identity::NewIdentity,
     user::{NewUser, User},
     provider::Provider,
+    api_key::ApiKey,
 };
 use crate::repos::AccountsRepo;
-use crate::schema::{user_identities, users, oauth_providers};
+use crate::schema::{user_identities, users, oauth_providers, api_keys};
 
 pub struct PgAccountsRepo {
     pool: crate::db::pg::PgPool,
@@ -90,6 +91,18 @@ impl AccountsRepo for PgAccountsRepo {
         let row = ui::user_identities
             .filter(ui::provider_key.eq(provider_key))
             .filter(ui::subject.eq(subject))
+            .first::<crate::models::identity::UserIdentity>(&mut conn)
+            .await
+            .optional()?;
+        Ok(row)
+    }
+
+    async fn get_user_identity(&self, user_id: &str, provider_key: &str) -> anyhow::Result<Option<crate::models::identity::UserIdentity>> {
+        use user_identities::dsl as ui;
+        let mut conn = self.pool.get().await?;
+        let row = ui::user_identities
+            .filter(ui::user_id.eq(user_id))
+            .filter(ui::provider_key.eq(provider_key))
             .first::<crate::models::identity::UserIdentity>(&mut conn)
             .await
             .optional()?;
@@ -178,6 +191,61 @@ impl AccountsRepo for PgAccountsRepo {
             .set(&provider)
             .execute(&mut conn)
             .await?;
+        Ok(())
+    }
+
+    async fn create_api_key(&self, api_key: ApiKey) -> anyhow::Result<()> {
+        let mut conn = self.pool.get().await?;
+        diesel::insert_into(api_keys::table)
+            .values(&api_key)
+            .execute(&mut conn)
+            .await?;
+        Ok(())
+    }
+
+    async fn list_api_keys(&self, user_id: &str) -> anyhow::Result<Vec<ApiKey>> {
+        let mut conn = self.pool.get().await?;
+        let rows = api_keys::table
+            .filter(api_keys::user_id.eq(user_id))
+            .filter(api_keys::deleted_at.is_null())
+            .order(api_keys::created_at.desc())
+            .load::<ApiKey>(&mut conn)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn get_api_key_by_hash(&self, key_hash: &str) -> anyhow::Result<Option<ApiKey>> {
+        let mut conn = self.pool.get().await?;
+        let k = api_keys::table
+            .filter(api_keys::key_hash.eq(key_hash))
+            .filter(api_keys::deleted_at.is_null())
+            .first::<ApiKey>(&mut conn)
+            .await
+            .optional()?;
+        Ok(k)
+    }
+
+    async fn update_api_key_last_used(&self, id: &str) -> anyhow::Result<()> {
+        let mut conn = self.pool.get().await?;
+        let now = time::OffsetDateTime::now_utc().to_string();
+        diesel::update(api_keys::table.find(id))
+            .set(api_keys::last_used_at.eq(&now))
+            .execute(&mut conn)
+            .await?;
+        Ok(())
+    }
+
+    async fn soft_delete_api_key(&self, id: &str, user_id: &str) -> anyhow::Result<()> {
+        let mut conn = self.pool.get().await?;
+        let now = time::OffsetDateTime::now_utc().to_string();
+        diesel::update(
+            api_keys::table
+                .filter(api_keys::id.eq(id))
+                .filter(api_keys::user_id.eq(user_id))
+        )
+        .set(api_keys::deleted_at.eq(&now))
+        .execute(&mut conn)
+        .await?;
         Ok(())
     }
 }

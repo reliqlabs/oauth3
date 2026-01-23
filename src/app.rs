@@ -128,6 +128,7 @@ async fn seed_providers_from_env(state: &AppState) -> anyhow::Result<()> {
             is_enabled: 1,
             created_at: now.clone(),
             updated_at: now.clone(),
+            api_base_url: Some("https://www.googleapis.com".into()),
         }).await?;
     }
 
@@ -149,12 +150,16 @@ async fn seed_providers_from_env(state: &AppState) -> anyhow::Result<()> {
             is_enabled: 1,
             created_at: now.clone(),
             updated_at: now.clone(),
+            api_base_url: Some("https://api.github.com".into()),
         }).await?;
     }
 
     // 3. Dex
     if state.accounts.get_provider("dex").await?.is_none() {
         let mode = get_env("AUTH_DEX_MODE", "placeholder");
+        let issuer = get_env("DEX_ISSUER", "http://localhost:5556/dex");
+        // For Dex, derive API base URL from issuer (strip /dex path)
+        let api_base = issuer.strip_suffix("/dex").unwrap_or(&issuer).to_string();
         state.accounts.save_provider(Provider {
             id: "dex".into(),
             name: "Dex".into(),
@@ -162,7 +167,7 @@ async fn seed_providers_from_env(state: &AppState) -> anyhow::Result<()> {
             mode,
             client_id: std::env::var("DEX_CLIENT_ID").ok(),
             client_secret: std::env::var("DEX_CLIENT_SECRET").ok(),
-            issuer: Some(get_env("DEX_ISSUER", "http://localhost:5556/dex")),
+            issuer: Some(issuer),
             auth_url: None,
             token_url: None,
             scopes: std::env::var("DEX_SCOPES").ok(),
@@ -170,6 +175,7 @@ async fn seed_providers_from_env(state: &AppState) -> anyhow::Result<()> {
             is_enabled: 1,
             created_at: now.clone(),
             updated_at: now.clone(),
+            api_base_url: Some(api_base),
         }).await?;
     }
 
@@ -192,6 +198,13 @@ pub fn build_router(state: AppState) -> Router {
         .route("/account/linked-identities", get(crate::web::handlers::account::list_identities))
         .route("/account/link/{provider}", post(crate::web::handlers::account::start_link_provider))
         .route("/account/unlink/{provider}", post(crate::web::handlers::account::unlink_provider))
+        // API key management
+        .route("/account/api-keys", get(crate::web::handlers::account::list_api_keys))
+        .route("/account/api-keys", post(crate::web::handlers::account::create_api_key))
+        .route("/account/api-keys/{key_id}", axum::routing::delete(crate::web::handlers::account::delete_api_key))
+        // OAuth proxy endpoint - forwards authenticated requests to provider APIs
+        .route("/proxy/{provider}/{*path}",
+            axum::routing::any(crate::web::proxy::proxy_request))
         .nest_service("/static", ServeDir::new("static"))
         .with_state(state)
         .layer(middleware::from_fn(crate::web::middleware::attestation_middleware))

@@ -18,4 +18,5 @@ pub struct Provider {
     pub is_enabled: i32,
     pub created_at: String,
     pub updated_at: String,
+    pub api_base_url: Option<String>,
 }

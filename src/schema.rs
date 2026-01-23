@@ -1,6 +1,19 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    api_keys (id) {
+        id -> Text,
+        user_id -> Text,
+        name -> Text,
+        key_hash -> Text,
+        scopes -> Text,
+        created_at -> Text,
+        last_used_at -> Nullable<Text>,
+        deleted_at -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
     oauth_providers (id) {
         id -> Text,
         name -> Text,
@@ -16,6 +29,7 @@ diesel::table! {
         is_enabled -> Integer,
         created_at -> Text,
         updated_at -> Text,
+        api_base_url -> Nullable<Text>,
     }
 }
 
@@ -46,6 +60,7 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(api_keys -> users (user_id));
 diesel::joinable!(user_identities -> users (user_id));
 
-diesel::allow_tables_to_appear_in_same_query!(user_identities, users,);
+diesel::allow_tables_to_appear_in_same_query!(api_keys, oauth_providers, user_identities, users,);
