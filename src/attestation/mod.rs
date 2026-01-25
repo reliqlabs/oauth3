@@ -43,7 +43,7 @@ fn is_using_unix_socket() -> bool {
 /// Response from dstack GetQuote endpoint
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Quote {
-    /// Base64-encoded TDX quote
+    /// Hex-encoded TDX quote (dstack returns hex, not base64)
     pub quote: String,
     /// Optional event log
     #[serde(rename = "eventLog")]

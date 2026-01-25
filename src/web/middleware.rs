@@ -5,6 +5,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use base64::Engine;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 
@@ -72,11 +73,19 @@ pub async fn attestation_middleware(request: Request, next: Next) -> Result<Resp
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
+    // Convert hex quote to base64 (dstack returns hex, but standard format is base64)
+    let quote_bytes = hex::decode(&quote.quote)
+        .map_err(|e| {
+            tracing::error!(error = ?e, "Failed to decode hex quote");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let quote_b64 = base64::engine::general_purpose::STANDARD.encode(&quote_bytes);
+
     // Wrap with attestation
     let attested_response = json!({
         "data": original_json,
         "attestation": {
-            "quote": quote.quote,
+            "quote": quote_b64,
             "eventLog": quote.event_log
         }
     });

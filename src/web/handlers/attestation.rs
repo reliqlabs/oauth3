@@ -1,4 +1,5 @@
 use axum::{http::StatusCode, response::IntoResponse, Json};
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::attestation::DstackClient;
@@ -58,8 +59,16 @@ pub async fn attestation() -> Result<impl IntoResponse, (StatusCode, String)> {
             (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
         })?;
 
+    // Convert hex quote to base64 (dstack returns hex, but standard format is base64)
+    let quote_bytes = hex::decode(&quote.quote)
+        .map_err(|e| {
+            tracing::error!(error = ?e, "Failed to decode hex quote");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Invalid hex quote".to_string())
+        })?;
+    let quote_b64 = base64::engine::general_purpose::STANDARD.encode(&quote_bytes);
+
     Ok(Json(AttestationResponse {
-        quote: quote.quote,
+        quote: quote_b64,
         event_log: quote.event_log,
         vm_config: quote.vm_config,
     }))

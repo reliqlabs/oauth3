@@ -8,8 +8,12 @@ thiserror = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
-sha2 = "0.10"
-hex = "0.4"
-tdx-quote = "0.0.5"
+sha2 = { version = "0.10", default-features = false }
+hex = { version = "0.4", default-features = false, features = ["alloc", "std"] }
+dcap-qvl = "0.3"
+tokio = { version = "1", features = ["rt"] }
+anyhow = "1"
+parity-scale-codec = "3"
 
 [dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
