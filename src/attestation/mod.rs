@@ -5,25 +5,35 @@ use sha2::{Digest, Sha256};
 fn get_dstack_client() -> reqwest::Client {
     // Check for Unix socket path (production Phala)
     if let Ok(socket_path) = std::env::var("DSTACK_SOCKET") {
+        tracing::info!(socket_path = %socket_path, "Using Unix socket for dstack");
         return reqwest::Client::builder()
-            .unix_socket(socket_path)
+            .unix_socket(std::path::Path::new(&socket_path))
             .build()
             .expect("Failed to build Unix socket client");
     }
 
     // Fall back to HTTP endpoint (local dev with simulator)
+    tracing::info!("Using HTTP endpoint for dstack");
     reqwest::Client::new()
 }
 
 fn get_dstack_url() -> String {
     // For Unix socket, use a dummy localhost URL (the socket connector will handle it)
-    if std::env::var("DSTACK_SOCKET").is_ok() {
-        return "http://localhost".to_string();
+    match std::env::var("DSTACK_SOCKET") {
+        Ok(socket_path) => {
+            tracing::info!(socket_path = %socket_path, "DSTACK_SOCKET is set, using localhost URL");
+            return "http://localhost".to_string();
+        }
+        Err(e) => {
+            tracing::warn!(error = ?e, "DSTACK_SOCKET not set");
+        }
     }
 
     // For HTTP, use configurable endpoint
-    std::env::var("DSTACK_ENDPOINT")
-        .unwrap_or_else(|_| "http://simulator:8090".to_string())
+    let endpoint = std::env::var("DSTACK_ENDPOINT")
+        .unwrap_or_else(|_| "http://simulator:8090".to_string());
+    tracing::info!(endpoint = %endpoint, "Using HTTP endpoint");
+    endpoint
 }
 
 /// Response from dstack GetQuote endpoint
