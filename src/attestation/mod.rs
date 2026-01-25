@@ -2,10 +2,29 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-// Use HTTP endpoint for simulator (works in both local dev and production)
-// In production Phala Cloud, this will be the actual dstack socket endpoint
-// For local dev with tappd-simulator, use HTTP
-const DSTACK_ENDPOINT: &str = "http://simulator:8090";
+fn get_dstack_client() -> reqwest::Client {
+    // Check for Unix socket path (production Phala)
+    if let Ok(socket_path) = std::env::var("DSTACK_SOCKET") {
+        return reqwest::Client::builder()
+            .unix_socket(socket_path)
+            .build()
+            .expect("Failed to build Unix socket client");
+    }
+
+    // Fall back to HTTP endpoint (local dev with simulator)
+    reqwest::Client::new()
+}
+
+fn get_dstack_url() -> String {
+    // For Unix socket, use a dummy localhost URL (the socket connector will handle it)
+    if std::env::var("DSTACK_SOCKET").is_ok() {
+        return "http://localhost".to_string();
+    }
+
+    // For HTTP, use configurable endpoint
+    std::env::var("DSTACK_ENDPOINT")
+        .unwrap_or_else(|_| "http://simulator:8090".to_string())
+}
 
 /// Response from dstack GetQuote endpoint
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,9 +81,9 @@ impl DstackClient {
         };
 
         let json_param = serde_json::to_string(&request_body)?;
-        let url = format!("{}/prpc/Tappd.TdxQuote?json={}", DSTACK_ENDPOINT, urlencoding::encode(&json_param));
+        let url = format!("{}/prpc/Tappd.TdxQuote?json={}", get_dstack_url(), urlencoding::encode(&json_param));
 
-        let client = reqwest::Client::new();
+        let client = get_dstack_client();
         let response = client
             .get(&url)
             .send()
@@ -93,9 +112,9 @@ impl DstackClient {
 
         let request_body = DeriveKeyRequest { path };
         let json_param = serde_json::to_string(&request_body)?;
-        let url = format!("{}/prpc/Tappd.DeriveKey?json={}", DSTACK_ENDPOINT, urlencoding::encode(&json_param));
+        let url = format!("{}/prpc/Tappd.DeriveKey?json={}", get_dstack_url(), urlencoding::encode(&json_param));
 
-        let client = reqwest::Client::new();
+        let client = get_dstack_client();
         let response = client
             .get(&url)
             .send()

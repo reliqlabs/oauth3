@@ -62,6 +62,7 @@ impl FromRequestParts<AppState> for SessionUser {
             if let Some(session_data) = session::get_session(&cookies, &state.cookie_key) {
                 Ok(SessionUser(session_data.user_id))
             } else {
+                tracing::warn!("No valid session found in cookies");
                 Err((
                     StatusCode::UNAUTHORIZED,
                     Json(json!({"error": "Not authenticated"})),
