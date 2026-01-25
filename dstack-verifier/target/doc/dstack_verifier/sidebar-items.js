@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["VerificationError"],"struct":["AttestationResponse","AttestationVerifier","InfoResponse","VerificationReport"]};
