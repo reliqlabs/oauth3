@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Parse arguments
 ENV_FILE="${1:-.env.phala}"
+APP_ID="${2:-}"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Error: Environment file not found: $ENV_FILE"
-  echo "Usage: $0 [env-file]"
+  echo "Usage: $0 [env-file] [app-id]"
   echo "Example: $0 .env.phala"
+  echo "Example: $0 .env.phala my-app-123"
   exit 1
 fi
 
@@ -81,17 +84,35 @@ ENV_VARS[APP_BIND_ADDR]=1
 ENV_VARS[RUST_LOG]=1
 ENV_VARS[DOCKER_IMAGE]=1
 
-# Build env args array - only include variables from ENV_FILE
-ENV_ARGS=()
+# Create temp directory for generated env file
+TEMP_DIR=$(mktemp -d)
+TEMP_ENV_FILE="$TEMP_DIR/phala-deploy.env"
+
+# Cleanup on exit
+trap "rm -rf '$TEMP_DIR'" EXIT
+
+# Generate env file from current environment
+echo "# Generated environment file for Phala deployment" > "$TEMP_ENV_FILE"
+echo "# Source: $ENV_FILE" >> "$TEMP_ENV_FILE"
+echo "# Generated: $(date)" >> "$TEMP_ENV_FILE"
+echo "" >> "$TEMP_ENV_FILE"
+
 for var in "${!ENV_VARS[@]}"; do
   value="${!var}"
   # Strip surrounding quotes if present
   if [[ "$value" =~ ^\"(.*)\"$ ]] || [[ "$value" =~ ^\'(.*)\'$ ]]; then
     value="${BASH_REMATCH[1]}"
   fi
-  # Add as key=value pairs
-  ENV_ARGS+=("-e" "${var}=${value}")
+  echo "${var}=${value}" >> "$TEMP_ENV_FILE"
 done
+
+# Show generated env file
+echo ""
+echo "Generated environment file at: $TEMP_ENV_FILE"
+echo "────────────────────────────────────────"
+cat "$TEMP_ENV_FILE"
+echo "────────────────────────────────────────"
+echo ""
 
 # Build the command
 CMD=(
@@ -102,20 +123,22 @@ CMD=(
   --memory "$MEMORY"
   --disk-size "$DISK_SIZE"
   --image "$DSTACK_IMAGE"
+  --env-file "$TEMP_ENV_FILE"
 )
+
+# Add app-id if specified
+if [[ -n "$APP_ID" ]]; then
+  CMD+=(--cvm-id "$APP_ID")
+fi
 
 # Add teepod if specified
 if [[ -n "$TEEPOD_ID" ]]; then
   CMD+=(--teepod-id "$TEEPOD_ID")
 fi
 
-# Add all environment variables
-CMD+=("${ENV_ARGS[@]}")
-
 # Print the command
-echo ""
-echo "Running deployment command with ${#ENV_ARGS[@]} environment variables"
-echo "Command: ${CMD[@]}"
+echo "Deployment command:"
+echo "${CMD[@]}"
 echo ""
 
 # Confirm before running
@@ -123,6 +146,8 @@ read -p "Deploy to Phala? (y/N) " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
   echo "Deployment cancelled"
+  echo "Generated env file preserved at: $TEMP_ENV_FILE"
+  trap - EXIT  # Disable cleanup
   exit 0
 fi
 
