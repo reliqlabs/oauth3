@@ -44,13 +44,19 @@ pub async fn attestation() -> Result<impl IntoResponse, (StatusCode, String)> {
     // Create reportData from app info (matches Phala Cloud pattern)
     let info = get_app_info();
     let info_json = serde_json::to_vec(&info)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!(error = ?e, "Failed to serialize app info");
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        })?;
 
     // Get quote with app info embedded
     let quote = client
         .get_quote(&info_json)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!(error = ?e, "Failed to get attestation quote");
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        })?;
 
     Ok(Json(AttestationResponse {
         quote: quote.quote,

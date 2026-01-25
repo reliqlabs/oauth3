@@ -49,7 +49,10 @@ pub async fn attestation_middleware(request: Request, next: Next) -> Result<Resp
     let bytes = body
         .collect()
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(|e| {
+            tracing::error!(error = ?e, "Failed to collect response body");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
         .to_bytes();
 
     // Get attestation quote for the response body
@@ -57,11 +60,17 @@ pub async fn attestation_middleware(request: Request, next: Next) -> Result<Resp
     let quote = client
         .get_quote(&bytes)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            tracing::error!(error = ?e, "Failed to get attestation quote");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     // Parse original response as JSON
     let original_json: Value = serde_json::from_slice(&bytes)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            tracing::error!(error = ?e, "Failed to parse response as JSON");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     // Wrap with attestation
     let attested_response = json!({
@@ -73,7 +82,10 @@ pub async fn attestation_middleware(request: Request, next: Next) -> Result<Resp
     });
 
     let new_body = serde_json::to_vec(&attested_response)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            tracing::error!(error = ?e, "Failed to serialize attested response");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     Ok(Response::from_parts(parts, Body::from(new_body)))
 }

@@ -50,7 +50,8 @@ impl FromRequestParts<AppState> for SessionUser {
             // Fall back to session cookie
             let cookies = Cookies::from_request_parts(parts, state)
                 .await
-                .map_err(|_| {
+                .map_err(|e| {
+                    tracing::error!(error = ?e, "Failed to extract cookies");
                     (
                         StatusCode::UNAUTHORIZED,
                         Json(json!({"error": "Not authenticated"})),
@@ -84,7 +85,8 @@ async fn authenticate_with_api_key(
         .accounts
         .get_api_key_by_hash(&key_hash)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::error!(error = ?e, "Failed to look up API key");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": "Database error"})),
