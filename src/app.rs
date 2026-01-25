@@ -183,6 +183,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/attestation", get(crate::web::handlers::attestation::attestation))
         .route("/info", get(crate::web::handlers::attestation::info))
+        .route("/verify", post(crate::web::handlers::attestation::verify))
         .route("/login", get(crate::web::pages::login))
         .route("/account", get(crate::web::pages::account))
         .route("/auth/{provider}", get(crate::web::handlers::auth::start))

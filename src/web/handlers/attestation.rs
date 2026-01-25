@@ -3,6 +3,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::attestation::DstackClient;
+use dstack_verifier::{AttestationVerifier, AttestationResponse as DstackAttestation, InfoResponse as DstackInfo};
 
 /// Standard Phala Cloud attestation response
 /// Follows pattern from https://docs.phala.com/phala-cloud/phala-cloud-user-guides/building-with-tee/generate-ra-report
@@ -88,4 +89,53 @@ fn get_app_info() -> InfoResponse {
         name: env!("CARGO_PKG_NAME").to_string(),
         build_info: option_env!("BUILD_TIMESTAMP").map(String::from),
     }
+}
+
+/// Request body for /verify endpoint
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VerifyRequest {
+    /// Attestation data (quote, event log, vm config)
+    pub attestation: DstackAttestation,
+    /// Application info to verify against quote
+    pub info: DstackInfo,
+}
+
+/// POST /verify
+///
+/// Verifies a TDX attestation quote and returns detailed verification results.
+///
+/// NOTE: Currently uses embedded dstack-verifier implementation instead of the official
+/// dstack-verifier library from https://github.com/Dstack-TEE/dstack because:
+///
+/// 1. v0.5.5 is binary-only (HTTP server, not a library)
+/// 2. v0.5.5 has compilation errors in ra-tls dependency (KeyRejected doesn't implement Error trait)
+/// 3. Latest main branch (as of 2026-01-25) has compilation errors in tdx-attest dependency
+///
+/// TODO: Revisit integration with official dstack-verifier once upstream build issues are resolved.
+///       Check: https://github.com/Dstack-TEE/dstack/releases
+///
+/// Current implementation provides:
+/// - TDX quote cryptographic verification via dcap-qvl (same as official verifier)
+/// - TCB status validation
+/// - Report data binding to application info
+/// - RTMR event log replay verification
+///
+/// Missing from official verifier:
+/// - OS image hash verification (requires dstack-mr/ra-tls which don't compile)
+pub async fn verify(
+    Json(request): Json<VerifyRequest>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    // Create verifier with default configuration
+    let verifier = AttestationVerifier::new();
+
+    // Perform verification
+    let result = verifier
+        .verify_attestation(&request.attestation, &request.info)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = ?e, "Verification failed");
+            (StatusCode::BAD_REQUEST, format!("Verification failed: {}", e))
+        })?;
+
+    Ok(Json(result))
 }

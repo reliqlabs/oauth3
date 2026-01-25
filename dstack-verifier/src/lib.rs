@@ -1,3 +1,24 @@
+//! Embedded TDX attestation verifier
+//!
+//! This is a lightweight implementation of TDX quote verification, based on
+//! the official dstack-verifier v0.5.5 verification logic.
+//!
+//! ## Why not use official dstack-verifier?
+//!
+//! As of 2026-01-25, the official dstack-verifier cannot be used as a library:
+//! - v0.5.5: Binary-only (HTTP server), has ra-tls compilation errors
+//! - main branch: Has tdx-attest compilation errors
+//!
+//! This implementation provides core verification features using the same
+//! dcap-qvl library (v0.3) as the official verifier.
+//!
+//! ## TODO
+//!
+//! Revisit integration with official dstack-verifier once upstream issues are resolved:
+//! - Check releases: https://github.com/Dstack-TEE/dstack/releases
+//! - Look for library exports in Cargo.toml [lib] section
+//! - Test compilation of ra-tls, dstack-mr, tdx-attest dependencies
+
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha384};

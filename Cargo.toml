@@ -59,6 +59,8 @@ urlencoding = "2"
 bytes = "1"
 http-body-util = "0.1"
 url = "2"
+# dstack-verifier with official v0.5.5 code
+dstack-verifier = { path = "dstack-verifier" }
 
 [dev-dependencies]
 # Test-only; avoid compiling in production images
