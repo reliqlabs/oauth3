@@ -11,6 +11,7 @@ staticClients:
 - id: oauth3-dev
   redirectURIs:
   - 'http://localhost:8080/auth/callback/dex'
+  - 'http://app:8080/auth/callback/dex'
   name: 'OAuth3 Dev'
   secret: dex-secret
   # Skip the approval page for easier automated testing

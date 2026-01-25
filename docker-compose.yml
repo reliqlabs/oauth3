@@ -39,7 +39,8 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/oauth3
       RUST_LOG: info,oauth3=debug
-      DEX_ISSUER_INTERNAL: http://dex:5556/dex
+    extra_hosts:
+      - "localhost:host-gateway"
     ports:
       - "8080:8080"
 

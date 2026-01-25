@@ -1,0 +1,10 @@
+/Users/mv/Development/reliq/oauth3/dstack-verifier/target/debug/deps/tdx_quote-9e524314b5d99129.d: /Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/lib.rs /Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/error.rs /Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/take_n.rs /Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/pck/mod.rs /Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/pck/error.rs /Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/pck/Intel_SGX_Provisioning_Certification_RootCA.cer
+
+/Users/mv/Development/reliq/oauth3/dstack-verifier/target/debug/deps/libtdx_quote-9e524314b5d99129.rmeta: /Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/lib.rs /Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/error.rs /Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/take_n.rs /Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/pck/mod.rs /Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/pck/error.rs /Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/pck/Intel_SGX_Provisioning_Certification_RootCA.cer
+
+/Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/lib.rs:
+/Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/error.rs:
+/Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/take_n.rs:
+/Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/pck/mod.rs:
+/Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/pck/error.rs:
+/Users/mv/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tdx-quote-0.0.5/src/pck/Intel_SGX_Provisioning_Certification_RootCA.cer:
