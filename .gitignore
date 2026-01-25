@@ -1,6 +1,7 @@
 # Rust / Cargo
 # Build output
 /target/
+/dstack-verifier/target/
 
 # If this were a library you might ignore Cargo.lock, but for applications it should be committed
 # Cargo.lock
