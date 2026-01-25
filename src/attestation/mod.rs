@@ -17,23 +17,27 @@ fn get_dstack_client() -> reqwest::Client {
     reqwest::Client::new()
 }
 
-fn get_dstack_url() -> String {
-    // For Unix socket, use a dummy localhost URL (the socket connector will handle it)
+fn get_dstack_base_url() -> String {
+    // For Unix socket, use dstack:// scheme (Phala production)
     match std::env::var("DSTACK_SOCKET") {
         Ok(socket_path) => {
-            tracing::info!(socket_path = %socket_path, "DSTACK_SOCKET is set, using localhost URL");
-            return "http://localhost".to_string();
+            tracing::info!(socket_path = %socket_path, "Using Unix socket for dstack");
+            return "http://dstack".to_string();
         }
         Err(e) => {
-            tracing::warn!(error = ?e, "DSTACK_SOCKET not set");
+            tracing::warn!(error = ?e, "DSTACK_SOCKET not set, using HTTP endpoint");
         }
     }
 
-    // For HTTP, use configurable endpoint
+    // For HTTP, use configurable endpoint (simulator)
     let endpoint = std::env::var("DSTACK_ENDPOINT")
         .unwrap_or_else(|_| "http://simulator:8090".to_string());
     tracing::info!(endpoint = %endpoint, "Using HTTP endpoint");
     endpoint
+}
+
+fn is_using_unix_socket() -> bool {
+    std::env::var("DSTACK_SOCKET").is_ok()
 }
 
 /// Response from dstack GetQuote endpoint
@@ -79,7 +83,6 @@ impl DstackClient {
             hex::encode(padded)
         };
 
-        // Use tappd-simulator HTTP API format
         #[derive(Serialize)]
         struct GetQuoteRequest {
             #[serde(rename = "reportData")]
@@ -90,15 +93,26 @@ impl DstackClient {
             report_data: format!("0x{}", hex_data),
         };
 
-        let json_param = serde_json::to_string(&request_body)?;
-        let url = format!("{}/prpc/Tappd.TdxQuote?json={}", get_dstack_url(), urlencoding::encode(&json_param));
-
         let client = get_dstack_client();
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to send request to dstack")?;
+
+        // Phala dstack uses POST to /GetQuote, simulator uses GET to /prpc/Tappd.TdxQuote
+        let response = if is_using_unix_socket() {
+            let url = format!("{}/GetQuote", get_dstack_base_url());
+            client
+                .post(&url)
+                .json(&request_body)
+                .send()
+                .await
+                .context("Failed to send request to dstack")?
+        } else {
+            let json_param = serde_json::to_string(&request_body)?;
+            let url = format!("{}/prpc/Tappd.TdxQuote?json={}", get_dstack_base_url(), urlencoding::encode(&json_param));
+            client
+                .get(&url)
+                .send()
+                .await
+                .context("Failed to send request to dstack")?
+        };
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
@@ -121,15 +135,26 @@ impl DstackClient {
         }
 
         let request_body = DeriveKeyRequest { path };
-        let json_param = serde_json::to_string(&request_body)?;
-        let url = format!("{}/prpc/Tappd.DeriveKey?json={}", get_dstack_url(), urlencoding::encode(&json_param));
-
         let client = get_dstack_client();
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to send request to dstack")?;
+
+        // Phala dstack uses POST to /DeriveKey, simulator uses GET to /prpc/Tappd.DeriveKey
+        let response = if is_using_unix_socket() {
+            let url = format!("{}/DeriveKey", get_dstack_base_url());
+            client
+                .post(&url)
+                .json(&request_body)
+                .send()
+                .await
+                .context("Failed to send request to dstack")?
+        } else {
+            let json_param = serde_json::to_string(&request_body)?;
+            let url = format!("{}/prpc/Tappd.DeriveKey?json={}", get_dstack_base_url(), urlencoding::encode(&json_param));
+            client
+                .get(&url)
+                .send()
+                .await
+                .context("Failed to send request to dstack")?
+        };
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
