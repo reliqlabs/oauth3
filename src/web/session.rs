@@ -20,8 +20,12 @@ use crate::models::api_key::scopes;
 ///
 /// Usage:
 /// ```
+/// use oauth3::web::session::SessionUser;
+/// use axum::response::IntoResponse;
+///
 /// async fn handler(SessionUser(user_id): SessionUser) -> impl IntoResponse {
 ///     // user_id is guaranteed to be present
+///     format!("User: {}", user_id)
 /// }
 /// ```
 pub struct SessionUser(pub String);

@@ -85,6 +85,10 @@ ENV_VARS[DOCKER_IMAGE]=1
 ENV_ARGS=()
 for var in "${!ENV_VARS[@]}"; do
   value="${!var}"
+  # Strip surrounding quotes if present
+  if [[ "$value" =~ ^\"(.*)\"$ ]] || [[ "$value" =~ ^\'(.*)\'$ ]]; then
+    value="${BASH_REMATCH[1]}"
+  fi
   # Add as key=value pairs
   ENV_ARGS+=("-e" "${var}=${value}")
 done

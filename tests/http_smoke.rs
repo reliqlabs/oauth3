@@ -1,5 +1,5 @@
 use axum::{body::Body, http::{Request, StatusCode}};
-use tower::{Service, ServiceExt}; // for `call` and `oneshot`
+use tower::ServiceExt; // for `call` and `oneshot`
 use rand::RngCore;
 use base64::Engine;
 
