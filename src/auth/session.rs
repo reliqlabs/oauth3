@@ -3,6 +3,7 @@ use tower_cookies::{Cookie, Cookies};
 use time::{Duration, OffsetDateTime};
 
 pub const SESSION_COOKIE: &str = "sid";
+pub const RETURN_TO_COOKIE: &str = "return_to";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
@@ -13,7 +14,13 @@ pub struct Session {
 pub fn get_session(cookies: &Cookies, key: &tower_cookies::Key) -> Option<Session> {
     let c = cookies.private(key).get(SESSION_COOKIE)?;
     let val = c.value().as_bytes();
-    serde_json::from_slice(val).ok()
+    let session: Session = serde_json::from_slice(val).ok()?;
+    if let Some(exp) = session.exp {
+        if OffsetDateTime::now_utc().unix_timestamp() > exp {
+            return None;
+        }
+    }
+    Some(session)
 }
 
 pub fn set_session(
@@ -40,6 +47,26 @@ pub fn clear_session(cookies: &Cookies, key: &tower_cookies::Key) {
     base.set_path("/");
     cookies.remove(base.clone());
     cookies.private(key).remove(base);
+}
+
+pub fn set_login_return_to(cookies: &Cookies, path: &str) {
+    let mut cookie = Cookie::new(RETURN_TO_COOKIE, path.to_string());
+    cookie.set_path("/");
+    cookie.set_http_only(true);
+    cookie.set_same_site(tower_cookies::cookie::SameSite::Lax);
+    cookie.set_secure(is_https());
+    cookie.set_max_age(Duration::minutes(10));
+    cookies.add(cookie);
+}
+
+pub fn take_login_return_to(cookies: &Cookies) -> Option<String> {
+    let value = cookies.get(RETURN_TO_COOKIE).map(|c| c.value().to_string());
+    if value.is_some() {
+        let mut cookie = Cookie::new(RETURN_TO_COOKIE, "");
+        cookie.set_path("/");
+        cookies.remove(cookie);
+    }
+    value
 }
 
 pub(crate) fn is_https() -> bool {

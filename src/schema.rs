@@ -1,6 +1,58 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    applications (id) {
+        id -> Text,
+        owner_user_id -> Text,
+        name -> Text,
+        client_type -> Text,
+        client_secret_hash -> Nullable<Text>,
+        allowed_scopes -> Text,
+        is_enabled -> Integer,
+        created_at -> Text,
+        updated_at -> Text,
+    }
+}
+
+diesel::table! {
+    app_access_tokens (id) {
+        id -> Text,
+        token_hash -> Text,
+        app_id -> Text,
+        user_id -> Text,
+        scopes -> Text,
+        expires_at -> Text,
+        created_at -> Text,
+        last_used_at -> Nullable<Text>,
+        revoked_at -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    app_redirect_uris (id) {
+        id -> Text,
+        app_id -> Text,
+        redirect_uri -> Text,
+        created_at -> Text,
+    }
+}
+
+diesel::table! {
+    app_refresh_tokens (id) {
+        id -> Text,
+        token_hash -> Text,
+        app_id -> Text,
+        user_id -> Text,
+        scopes -> Text,
+        expires_at -> Text,
+        created_at -> Text,
+        revoked_at -> Nullable<Text>,
+        rotation_parent_id -> Nullable<Text>,
+        replaced_by_id -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
     api_keys (id) {
         id -> Text,
         user_id -> Text,
@@ -10,6 +62,21 @@ diesel::table! {
         created_at -> Text,
         last_used_at -> Nullable<Text>,
         deleted_at -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    oauth_codes (code_hash) {
+        code_hash -> Text,
+        app_id -> Text,
+        user_id -> Text,
+        redirect_uri -> Text,
+        scopes -> Text,
+        code_challenge -> Nullable<Text>,
+        code_challenge_method -> Nullable<Text>,
+        expires_at -> Text,
+        created_at -> Text,
+        consumed_at -> Nullable<Text>,
     }
 }
 
@@ -30,6 +97,17 @@ diesel::table! {
         created_at -> Text,
         updated_at -> Text,
         api_base_url -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    user_consents (id) {
+        id -> Text,
+        user_id -> Text,
+        app_id -> Text,
+        scopes -> Text,
+        created_at -> Text,
+        revoked_at -> Nullable<Text>,
     }
 }
 
@@ -60,7 +138,28 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(applications -> users (owner_user_id));
+diesel::joinable!(app_access_tokens -> applications (app_id));
+diesel::joinable!(app_access_tokens -> users (user_id));
+diesel::joinable!(app_redirect_uris -> applications (app_id));
+diesel::joinable!(app_refresh_tokens -> applications (app_id));
+diesel::joinable!(app_refresh_tokens -> users (user_id));
 diesel::joinable!(api_keys -> users (user_id));
+diesel::joinable!(oauth_codes -> applications (app_id));
+diesel::joinable!(oauth_codes -> users (user_id));
+diesel::joinable!(user_consents -> applications (app_id));
+diesel::joinable!(user_consents -> users (user_id));
 diesel::joinable!(user_identities -> users (user_id));
 
-diesel::allow_tables_to_appear_in_same_query!(api_keys, oauth_providers, user_identities, users,);
+diesel::allow_tables_to_appear_in_same_query!(
+    applications,
+    app_access_tokens,
+    app_redirect_uris,
+    app_refresh_tokens,
+    api_keys,
+    oauth_codes,
+    oauth_providers,
+    user_consents,
+    user_identities,
+    users,
+);

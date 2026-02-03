@@ -1,27 +1,12 @@
 //! Embedded TDX attestation verifier
 //!
-//! This is a lightweight implementation of TDX quote verification, based on
-//! the official dstack-verifier v0.5.5 verification logic.
-//!
-//! ## Why not use official dstack-verifier?
-//!
-//! As of 2026-01-25, the official dstack-verifier cannot be used as a library:
-//! - v0.5.5: Binary-only (HTTP server), has ra-tls compilation errors
-//! - main branch: Has tdx-attest compilation errors
-//!
-//! This implementation provides core verification features using the same
-//! dcap-qvl library (v0.3) as the official verifier.
-//!
-//! ## TODO
-//!
-//! Revisit integration with official dstack-verifier once upstream issues are resolved:
-//! - Check releases: https://github.com/Dstack-TEE/dstack/releases
-//! - Look for library exports in Cargo.toml [lib] section
-//! - Test compilation of ra-tls, dstack-mr, tdx-attest dependencies
+//! This is a lightweight library for TDX quote verification, based on the
+//! official dstack-verifier v0.5.5 verification logic.
 
+use anyhow::{Context, Result};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256, Sha384};
+use sha2::{Digest, Sha384};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -60,54 +45,39 @@ pub enum VerificationError {
     #[error("Hex decode error: {0}")]
     HexDecode(#[from] hex::FromHexError),
 
-    #[error("OS measurement mismatch: expected {expected}, got {actual}")]
-    OsMeasurementMismatch { expected: String, actual: String },
-
-    #[error("Compose hash mismatch: expected {expected}, got {actual}")]
-    ComposeHashMismatch { expected: String, actual: String },
-
-    #[error("Domain mismatch: expected {expected}, got {actual}")]
-    DomainMismatch { expected: String, actual: String },
+    #[error("Other error: {0}")]
+    Other(#[from] anyhow::Error),
 }
 
+/// Attestation response from dstack GetQuote endpoint
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttestationResponse {
+    /// Base64-encoded TDX quote
     pub quote: String,
+    /// JSON-encoded event log (optional)
     #[serde(rename = "eventLog", skip_serializing_if = "Option::is_none")]
     pub event_log: Option<String>,
+    /// JSON-encoded VM config (optional)
     #[serde(rename = "vmConfig", skip_serializing_if = "Option::is_none")]
     pub vm_config: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InfoResponse {
-    pub version: String,
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub build_info: Option<String>,
-}
-
-/// Configuration for OS and compose verification
+/// Configuration for the verifier
 #[derive(Debug, Clone)]
 pub struct VerifierConfig {
-    /// Expected OS measurement (RTMR[0]). If None, OS verification is skipped.
-    pub expected_os_hash: Option<[u8; 48]>,
-    /// Expected compose hash (SHA-256 of docker-compose.yml). If None, compose verification is skipped.
-    pub expected_compose_hash: Option<[u8; 32]>,
-    /// Expected domain name. If None, domain verification is skipped.
-    pub expected_domain: Option<String>,
+    /// PCCS URL for quote verification (default: https://pccs.phala.network)
+    pub pccs_url: String,
 }
 
 impl Default for VerifierConfig {
     fn default() -> Self {
         Self {
-            expected_os_hash: None,
-            expected_compose_hash: None,
-            expected_domain: None,
+            pccs_url: "https://pccs.phala.network".to_string(),
         }
     }
 }
 
+/// TDX attestation verifier
 pub struct AttestationVerifier {
     config: VerifierConfig,
 }
@@ -123,16 +93,15 @@ impl AttestationVerifier {
         Self { config }
     }
 
-    /// Verify that the attestation quote matches the application info
+    /// Verify attestation quote
     ///
-    /// This performs comprehensive verification:
+    /// This performs:
     /// 1. Full TDX quote verification using dcap-qvl (TCB status, certificates, collateral)
-    /// 2. Report data matching against info hash
-    /// 3. Event log RTMR replay verification
+    /// 2. Event log RTMR replay verification (if event log provided)
+    /// 3. Report data extraction
     pub async fn verify_attestation(
         &self,
         attestation: &AttestationResponse,
-        info: &InfoResponse,
     ) -> Result<VerificationReport, VerificationError> {
         // Parse the base64-encoded quote
         let quote_bytes = base64::engine::general_purpose::STANDARD
@@ -144,9 +113,8 @@ impl AttestationVerifier {
                 VerificationError::QuoteParse(format!("Failed to parse quote: {}", e))
             })?;
 
-        // Get collateral from PCCS (default Phala PCCS)
-        let pccs_url = "https://pccs.phala.network";
-        let collateral = dcap_qvl::collateral::get_collateral(pccs_url, &quote_bytes[..])
+        // Get collateral from PCCS
+        let collateral = dcap_qvl::collateral::get_collateral(&self.config.pccs_url, &quote_bytes[..])
             .await
             .map_err(|e| VerificationError::CollateralFetch(format!("Collateral fetch failed: {}", e)))?;
 
@@ -163,42 +131,24 @@ impl AttestationVerifier {
         let tcb_status = verified.status.clone();
         let advisory_ids = verified.advisory_ids.clone();
 
-        // Verify TCB status is UpToDate
-        if tcb_status != "UpToDate" {
-            return Err(VerificationError::TcbStatusNotCurrent(tcb_status));
-        }
-
         // Extract TDReport10 from the parsed quote
         let td_report = parsed_quote.report.as_td10()
             .ok_or_else(|| VerificationError::QuoteParse("Quote is not a TDX quote".to_string()))?;
 
-        // Verify reportData if not all zeros (optional binding)
-        let is_zero_report_data = td_report.report_data.iter().all(|&b| b == 0);
-        let report_data_valid = if is_zero_report_data {
-            true // No reportData binding in this quote
-        } else {
-            let expected_report_data = self.compute_report_data(info);
-            if td_report.report_data != expected_report_data {
-                return Err(VerificationError::ReportDataMismatch {
-                    expected: hex::encode(&expected_report_data),
-                    actual: hex::encode(&td_report.report_data),
-                });
-            }
-            true
+        // Extract report data
+        let report_data = hex::encode(&td_report.report_data);
+
+        // Extract RTMRs
+        let rtmrs = RTMRs {
+            mrtd: hex::encode(&td_report.mr_td),
+            rtmr0: hex::encode(&td_report.rt_mr0),
+            rtmr1: hex::encode(&td_report.rt_mr1),
+            rtmr2: hex::encode(&td_report.rt_mr2),
+            rtmr3: hex::encode(&td_report.rt_mr3),
         };
 
-        // Verify OS measurement (RTMR[0]) if configured
-        if let Some(expected_os) = &self.config.expected_os_hash {
-            if &td_report.rt_mr0 != expected_os {
-                return Err(VerificationError::OsMeasurementMismatch {
-                    expected: hex::encode(expected_os),
-                    actual: hex::encode(&td_report.rt_mr0),
-                });
-            }
-        }
-
-        // Verify RTMRs against event log if provided and non-empty
-        let rtmr_valid = if let Some(event_log_json) = &attestation.event_log {
+        // Verify event log if provided
+        let event_log_verified = if let Some(event_log_json) = &attestation.event_log {
             let event_log: Vec<LogEntry> = serde_json::from_str(event_log_json)?;
             if !event_log.is_empty() {
                 let quote_rtmrs = [
@@ -208,95 +158,22 @@ impl AttestationVerifier {
                     &td_report.rt_mr3[..],
                 ];
                 self.verify_event_log(&event_log, &quote_rtmrs)?;
-
-                // Verify compose hash if configured
-                if let Some(expected_compose) = &self.config.expected_compose_hash {
-                    self.verify_compose_hash(&event_log, expected_compose)?;
-                }
-
-                // Verify domain if configured
-                if let Some(expected_domain) = &self.config.expected_domain {
-                    self.verify_domain(&event_log, expected_domain)?;
-                }
-
                 true
             } else {
-                true // Empty event log, skip verification
+                false // Empty event log
             }
         } else {
-            true // No event log to verify
+            false // No event log provided
         };
 
         Ok(VerificationReport {
-            quote_valid: true,
-            report_data_valid,
+            quote_verified: true,
+            event_log_verified,
             tcb_status,
             advisory_ids,
-            rtmr_valid,
-            info: info.clone(),
+            report_data,
+            rtmrs,
         })
-    }
-
-    /// Verify compose hash from event log
-    fn verify_compose_hash(
-        &self,
-        event_log: &[LogEntry],
-        expected_hash: &[u8; 32],
-    ) -> Result<(), VerificationError> {
-        // Look for compose hash in event log (typically in event payload)
-        for entry in event_log {
-            if entry.event.contains("compose") || entry.event.contains("docker-compose") {
-                // Try to extract hash from event payload
-                if let Ok(payload_bytes) = hex::decode(&entry.event_payload) {
-                    if payload_bytes.len() == 32 {
-                        if &payload_bytes[..] != &expected_hash[..] {
-                            return Err(VerificationError::ComposeHashMismatch {
-                                expected: hex::encode(expected_hash),
-                                actual: hex::encode(&payload_bytes),
-                            });
-                        }
-                        return Ok(());
-                    }
-                }
-            }
-        }
-        // If no compose hash found in event log, skip verification
-        Ok(())
-    }
-
-    /// Verify domain from event log
-    fn verify_domain(
-        &self,
-        event_log: &[LogEntry],
-        expected_domain: &str,
-    ) -> Result<(), VerificationError> {
-        // Look for domain in event log (typically in event or event_payload)
-        for entry in event_log {
-            if entry.event.contains("domain") || entry.event_payload.contains(expected_domain) {
-                if !entry.event_payload.contains(expected_domain) {
-                    return Err(VerificationError::DomainMismatch {
-                        expected: expected_domain.to_string(),
-                        actual: entry.event_payload.clone(),
-                    });
-                }
-                return Ok(());
-            }
-        }
-        // If no domain found in event log, skip verification
-        Ok(())
-    }
-
-    /// Compute expected reportData from InfoResponse
-    /// Uses SHA-256 hash of the info JSON
-    fn compute_report_data(&self, info: &InfoResponse) -> [u8; 64] {
-        let info_json = serde_json::to_string(info).unwrap();
-        let mut hasher = Sha256::new();
-        hasher.update(info_json.as_bytes());
-        let hash = hasher.finalize();
-
-        let mut report_data = [0u8; 64];
-        report_data[..32].copy_from_slice(&hash);
-        report_data
     }
 
     /// Verify event log by replaying RTMR calculations
@@ -306,7 +183,7 @@ impl AttestationVerifier {
         &self,
         event_log: &[LogEntry],
         quote_rtmrs: &[&[u8]; 4],
-    ) -> Result<bool, VerificationError> {
+    ) -> Result<(), VerificationError> {
         // Initialize RTMRs (48 bytes each, all zeros)
         let mut rtmr: [Vec<u8>; 4] = [
             vec![0u8; 48],
@@ -328,15 +205,14 @@ impl AttestationVerifier {
             // Decode the digest from hex
             let digest = hex::decode(&entry.digest)?;
 
-            // Pad digest to 48 bytes if needed
-            let mut padded_digest = vec![0u8; 48];
-            let copy_len = digest.len().min(48);
-            padded_digest[..copy_len].copy_from_slice(&digest[..copy_len]);
+            // Validate digest against event payload
+            entry.validate()
+                .map_err(|e| VerificationError::EventLogVerification(format!("Event validation failed: {}", e)))?;
 
-            // Update RTMR: SHA384(current_rtmr || padded_digest)
+            // Update RTMR: SHA384(current_rtmr || digest)
             let mut hasher = Sha384::new();
             hasher.update(&rtmr[imr_index]);
-            hasher.update(&padded_digest);
+            hasher.update(&digest);
             rtmr[imr_index] = hasher.finalize().to_vec();
         }
 
@@ -351,24 +227,7 @@ impl AttestationVerifier {
             }
         }
 
-        Ok(true)
-    }
-
-    /// Calculate report data from input bytes
-    ///
-    /// Matches the logic in DstackClient::get_quote:
-    /// - If data > 64 bytes: SHA256 hash
-    /// - If data <= 64 bytes: zero-pad to 64 bytes
-    fn calculate_report_data(&self, data: &[u8]) -> Vec<u8> {
-        if data.len() > 64 {
-            let mut hasher = Sha256::new();
-            hasher.update(data);
-            hasher.finalize().to_vec()
-        } else {
-            let mut padded = vec![0u8; 64];
-            padded[..data.len()].copy_from_slice(data);
-            padded
-        }
+        Ok(())
     }
 }
 
@@ -378,14 +237,25 @@ impl Default for AttestationVerifier {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+/// Verification report
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationReport {
-    pub quote_valid: bool,
-    pub report_data_valid: bool,
+    pub quote_verified: bool,
+    pub event_log_verified: bool,
     pub tcb_status: String,
     pub advisory_ids: Vec<String>,
-    pub rtmr_valid: bool,
-    pub info: InfoResponse,
+    pub report_data: String,
+    pub rtmrs: RTMRs,
+}
+
+/// Runtime measurements from TDX quote
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RTMRs {
+    pub mrtd: String,
+    pub rtmr0: String,
+    pub rtmr1: String,
+    pub rtmr2: String,
+    pub rtmr3: String,
 }
 
 /// Event log entry from dstack
@@ -399,33 +269,40 @@ pub struct LogEntry {
     pub digest: String,
     /// Event name
     pub event: String,
-    /// Event-specific payload
+    /// Event-specific payload (hex-encoded)
     pub event_payload: String,
+}
+
+impl LogEntry {
+    /// Validate that digest matches SHA384(event_payload)
+    pub fn validate(&self) -> Result<()> {
+        let payload_bytes = hex::decode(&self.event_payload)
+            .context("Failed to decode event payload")?;
+
+        let mut hasher = Sha384::new();
+        hasher.update(&payload_bytes);
+        let computed_digest = hasher.finalize();
+
+        let digest_bytes = hex::decode(&self.digest)
+            .context("Failed to decode digest")?;
+
+        if computed_digest[..] != digest_bytes[..] {
+            anyhow::bail!(
+                "Digest mismatch for event '{}': expected {}, got {}",
+                self.event,
+                hex::encode(&digest_bytes),
+                hex::encode(&computed_digest)
+            );
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_calculate_report_data_short() {
-        let verifier = AttestationVerifier::new();
-        let data = b"hello";
-        let result = verifier.calculate_report_data(data);
-
-        assert_eq!(result.len(), 64);
-        assert_eq!(&result[..5], b"hello");
-        assert_eq!(&result[5..], &vec![0u8; 59][..]);
-    }
-
-    #[test]
-    fn test_calculate_report_data_long() {
-        let verifier = AttestationVerifier::new();
-        let data = vec![0u8; 100];
-        let result = verifier.calculate_report_data(&data);
-
-        assert_eq!(result.len(), 32); // SHA256 output
-    }
 
     #[tokio::test]
     async fn test_verify_attestation_with_real_quote() {
@@ -434,6 +311,18 @@ mod tests {
 
         let quote_bytes = hex::decode(&hex_quote).expect("Failed to decode hex quote");
         let quote_b64 = base64::engine::general_purpose::STANDARD.encode(&quote_bytes);
+        let expected_report_data =
+            "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+        let expected_mrtd =
+            "f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077";
+        let expected_rtmr0 =
+            "027b610ab0555482f8a3868524093bdf3cdbe2539f81dfeeb886864654cb2fe3422f7fc36d4bab6fa46683aad11d1ba7";
+        let expected_rtmr1 =
+            "daa9380dc33b14728a9adb222437cf14db2d40ffc4d7061d8f3c329f6c6b339f71486d33521287e8faeae22301f4d815";
+        let expected_rtmr2 =
+            "1bdc76d9cbe95bd6e977969bc3e2c5afab2e85cb6b19dc17cc71cefe27cfe7b4fe29605f275cba379ff8980caaeee674";
+        let expected_rtmr3 =
+            "9247265e1d532be641d2d421019c7b8da7cdaaada9e27ab7de3a82a078199c408650a862489a60783f3b5b6b5a003730";
 
         let attestation = AttestationResponse {
             quote: quote_b64,
@@ -441,19 +330,19 @@ mod tests {
             vm_config: None,
         };
 
-        let info = InfoResponse {
-            version: "0.1.0".to_string(),
-            name: "oauth3".to_string(),
-            build_info: None,
-        };
-
         let verifier = AttestationVerifier::new();
-        let result = verifier.verify_attestation(&attestation, &info).await;
+        let result = verifier.verify_attestation(&attestation).await;
 
         assert!(result.is_ok(), "Verification failed: {:?}", result.err());
         let report = result.unwrap();
         assert_eq!(report.tcb_status, "UpToDate");
-        assert!(report.quote_valid);
+        assert!(report.quote_verified);
+        assert_eq!(report.report_data, expected_report_data);
+        assert_eq!(report.rtmrs.mrtd, expected_mrtd);
+        assert_eq!(report.rtmrs.rtmr0, expected_rtmr0);
+        assert_eq!(report.rtmrs.rtmr1, expected_rtmr1);
+        assert_eq!(report.rtmrs.rtmr2, expected_rtmr2);
+        assert_eq!(report.rtmrs.rtmr3, expected_rtmr3);
     }
 
     #[test]

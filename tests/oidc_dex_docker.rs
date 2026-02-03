@@ -104,7 +104,7 @@ async fn test_app_with_state(dex_issuer: String) -> (Router, AppState) {
         issuer: Some(dex_issuer),
         auth_url: None,
         token_url: None,
-        scopes: None,
+        scopes: Some("openid email profile offline_access".into()),
         redirect_path: "/auth/callback/dex".into(),
         is_enabled: 1,
         created_at: now.clone(),

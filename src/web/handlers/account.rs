@@ -5,7 +5,6 @@ use tower_cookies::Cookies;
 
 use crate::{app::AppState, auth::session};
 use crate::models::api_key::{ApiKey, scopes};
-use crate::web::session::SessionUser;
 
 pub async fn me(State(state): State<AppState>, cookies: Cookies) -> impl IntoResponse {
     if let Some(s) = session::get_session(&cookies, &state.cookie_key) {
@@ -119,9 +118,12 @@ pub struct CreateApiKeyResponse {
 /// Create a new API key
 pub async fn create_api_key(
     State(state): State<AppState>,
-    SessionUser(user_id): SessionUser,
+    cookies: Cookies,
     Json(req): Json<CreateApiKeyRequest>,
 ) -> impl IntoResponse {
+    let Some(s) = session::get_session(&cookies, &state.cookie_key) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
     // Generate random API key
     let key = generate_api_key();
     let key_hash = hash_api_key(&key);
@@ -129,7 +131,7 @@ pub async fn create_api_key(
     let now = time::OffsetDateTime::now_utc().to_string();
     let api_key = ApiKey {
         id: uuid::Uuid::new_v4().to_string(),
-        user_id: user_id.clone(),
+        user_id: s.user_id.clone(),
         name: req.name,
         key_hash,
         scopes: scopes::PROXY.to_string(),
@@ -159,9 +161,12 @@ pub async fn create_api_key(
 /// List API keys for the current user
 pub async fn list_api_keys(
     State(state): State<AppState>,
-    SessionUser(user_id): SessionUser,
+    cookies: Cookies,
 ) -> impl IntoResponse {
-    match state.accounts.list_api_keys(&user_id).await {
+    let Some(s) = session::get_session(&cookies, &state.cookie_key) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    match state.accounts.list_api_keys(&s.user_id).await {
         Ok(keys) => {
             // Don't expose key_hash to client
             let safe_keys: Vec<_> = keys.into_iter().map(|k| json!({
@@ -183,10 +188,13 @@ pub async fn list_api_keys(
 /// Delete (soft delete) an API key
 pub async fn delete_api_key(
     State(state): State<AppState>,
-    SessionUser(user_id): SessionUser,
+    cookies: Cookies,
     Path(key_id): Path<String>,
 ) -> impl IntoResponse {
-    match state.accounts.soft_delete_api_key(&key_id, &user_id).await {
+    let Some(s) = session::get_session(&cookies, &state.cookie_key) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    match state.accounts.soft_delete_api_key(&key_id, &s.user_id).await {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             tracing::error!(error=?e, "failed to delete API key");

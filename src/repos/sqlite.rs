@@ -9,9 +9,25 @@ use crate::models::{
     user::{NewUser, User},
     provider::Provider,
     api_key::ApiKey,
+    application::Application,
+    app_redirect_uri::AppRedirectUri,
+    consent::UserConsent,
+    oauth_code::OAuthCode,
+    app_token::{AppAccessToken, AppRefreshToken},
 };
 use crate::repos::AccountsRepo;
-use crate::schema::{user_identities, users, oauth_providers, api_keys};
+use crate::schema::{
+    user_identities,
+    users,
+    oauth_providers,
+    api_keys,
+    applications,
+    app_redirect_uris,
+    user_consents,
+    oauth_codes,
+    app_access_tokens,
+    app_refresh_tokens,
+};
 
 pub struct SqliteAccountsRepo {
     pool: crate::db::sqlite::SqlitePool,
@@ -368,6 +384,314 @@ impl AccountsRepo for SqliteAccountsRepo {
             )
             .set(api_keys::deleted_at.eq(&now))
             .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn list_applications(&self, owner_user_id: &str) -> anyhow::Result<Vec<Application>> {
+        let owner_user_id = owner_user_id.to_string();
+        let pool = self.pool.clone();
+        let apps = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Application>> {
+            let mut conn = pool.get()?;
+            let rows = applications::table
+                .filter(applications::owner_user_id.eq(&owner_user_id))
+                .order(applications::created_at.desc())
+                .load::<Application>(&mut conn)?;
+            Ok(rows)
+        })
+        .await??;
+        Ok(apps)
+    }
+
+    async fn get_application(&self, id: &str) -> anyhow::Result<Option<Application>> {
+        let id = id.to_string();
+        let pool = self.pool.clone();
+        let app = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Application>> {
+            let mut conn = pool.get()?;
+            let row = applications::table
+                .find(&id)
+                .first::<Application>(&mut conn)
+                .optional()?;
+            Ok(row)
+        })
+        .await??;
+        Ok(app)
+    }
+
+    async fn save_application(&self, app: Application) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            diesel::insert_into(applications::table)
+                .values(&app)
+                .on_conflict(applications::id)
+                .do_update()
+                .set(&app)
+                .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn list_app_redirect_uris(&self, app_id: &str) -> anyhow::Result<Vec<AppRedirectUri>> {
+        let app_id = app_id.to_string();
+        let pool = self.pool.clone();
+        let rows = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<AppRedirectUri>> {
+            let mut conn = pool.get()?;
+            let rows = app_redirect_uris::table
+                .filter(app_redirect_uris::app_id.eq(&app_id))
+                .order(app_redirect_uris::created_at.asc())
+                .load::<AppRedirectUri>(&mut conn)?;
+            Ok(rows)
+        })
+        .await??;
+        Ok(rows)
+    }
+
+    async fn add_app_redirect_uri(&self, redirect_uri: AppRedirectUri) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            diesel::insert_into(app_redirect_uris::table)
+                .values(&redirect_uri)
+                .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn remove_app_redirect_uri(&self, app_id: &str, redirect_uri: &str) -> anyhow::Result<usize> {
+        let app_id = app_id.to_string();
+        let redirect_uri = redirect_uri.to_string();
+        let pool = self.pool.clone();
+        let rows = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+            let mut conn = pool.get()?;
+            let n = diesel::delete(
+                app_redirect_uris::table
+                    .filter(app_redirect_uris::app_id.eq(&app_id))
+                    .filter(app_redirect_uris::redirect_uri.eq(&redirect_uri))
+            )
+            .execute(&mut conn)?;
+            Ok(n as usize)
+        })
+        .await??;
+        Ok(rows)
+    }
+
+    async fn get_user_consent(&self, user_id: &str, app_id: &str) -> anyhow::Result<Option<UserConsent>> {
+        let user_id = user_id.to_string();
+        let app_id = app_id.to_string();
+        let pool = self.pool.clone();
+        let row = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<UserConsent>> {
+            let mut conn = pool.get()?;
+            let row = user_consents::table
+                .filter(user_consents::user_id.eq(&user_id))
+                .filter(user_consents::app_id.eq(&app_id))
+                .first::<UserConsent>(&mut conn)
+                .optional()?;
+            Ok(row)
+        })
+        .await??;
+        Ok(row)
+    }
+
+    async fn list_user_consents(&self, user_id: &str) -> anyhow::Result<Vec<UserConsent>> {
+        let user_id = user_id.to_string();
+        let pool = self.pool.clone();
+        let rows = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<UserConsent>> {
+            let mut conn = pool.get()?;
+            let rows = user_consents::table
+                .filter(user_consents::user_id.eq(&user_id))
+                .order(user_consents::created_at.desc())
+                .load::<UserConsent>(&mut conn)?;
+            Ok(rows)
+        })
+        .await??;
+        Ok(rows)
+    }
+
+    async fn save_user_consent(&self, consent: UserConsent) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            diesel::insert_into(user_consents::table)
+                .values(&consent)
+                .on_conflict((user_consents::user_id, user_consents::app_id))
+                .do_update()
+                .set((
+                    user_consents::scopes.eq(&consent.scopes),
+                    user_consents::revoked_at.eq(&consent.revoked_at),
+                ))
+                .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn revoke_user_consent(&self, user_id: &str, app_id: &str) -> anyhow::Result<()> {
+        let user_id = user_id.to_string();
+        let app_id = app_id.to_string();
+        let pool = self.pool.clone();
+        let now = time::OffsetDateTime::now_utc().to_string();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            diesel::update(
+                user_consents::table
+                    .filter(user_consents::user_id.eq(&user_id))
+                    .filter(user_consents::app_id.eq(&app_id))
+            )
+            .set(user_consents::revoked_at.eq(&now))
+            .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn create_oauth_code(&self, code: OAuthCode) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            diesel::insert_into(oauth_codes::table)
+                .values(&code)
+                .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn consume_oauth_code(&self, code_hash: &str) -> anyhow::Result<Option<OAuthCode>> {
+        let code_hash = code_hash.to_string();
+        let pool = self.pool.clone();
+        let now = time::OffsetDateTime::now_utc().to_string();
+        let row = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<OAuthCode>> {
+            let mut conn = pool.get()?;
+            conn.immediate_transaction(|conn| {
+                use oauth_codes::dsl as oc;
+                let row = oc::oauth_codes
+                    .filter(oc::code_hash.eq(&code_hash))
+                    .filter(oc::consumed_at.is_null())
+                    .first::<OAuthCode>(conn)
+                    .optional()?;
+                if row.is_some() {
+                    diesel::update(oc::oauth_codes.filter(oc::code_hash.eq(&code_hash)))
+                        .set(oc::consumed_at.eq(&now))
+                        .execute(conn)?;
+                }
+                Ok(row)
+            })
+        })
+        .await??;
+        Ok(row)
+    }
+
+    async fn create_app_access_token(&self, token: AppAccessToken) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            diesel::insert_into(app_access_tokens::table)
+                .values(&token)
+                .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn get_app_access_token_by_hash(&self, token_hash: &str) -> anyhow::Result<Option<AppAccessToken>> {
+        let token_hash = token_hash.to_string();
+        let pool = self.pool.clone();
+        let row = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<AppAccessToken>> {
+            let mut conn = pool.get()?;
+            let row = app_access_tokens::table
+                .filter(app_access_tokens::token_hash.eq(&token_hash))
+                .filter(app_access_tokens::revoked_at.is_null())
+                .first::<AppAccessToken>(&mut conn)
+                .optional()?;
+            Ok(row)
+        })
+        .await??;
+        Ok(row)
+    }
+
+    async fn update_app_access_token_last_used(&self, id: &str) -> anyhow::Result<()> {
+        let id = id.to_string();
+        let pool = self.pool.clone();
+        let now = time::OffsetDateTime::now_utc().to_string();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            diesel::update(app_access_tokens::table.find(&id))
+                .set(app_access_tokens::last_used_at.eq(&now))
+                .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn revoke_app_access_token(&self, id: &str) -> anyhow::Result<()> {
+        let id = id.to_string();
+        let pool = self.pool.clone();
+        let now = time::OffsetDateTime::now_utc().to_string();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            diesel::update(app_access_tokens::table.find(&id))
+                .set(app_access_tokens::revoked_at.eq(&now))
+                .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn create_app_refresh_token(&self, token: AppRefreshToken) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            diesel::insert_into(app_refresh_tokens::table)
+                .values(&token)
+                .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn get_app_refresh_token_by_hash(&self, token_hash: &str) -> anyhow::Result<Option<AppRefreshToken>> {
+        let token_hash = token_hash.to_string();
+        let pool = self.pool.clone();
+        let row = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<AppRefreshToken>> {
+            let mut conn = pool.get()?;
+            let row = app_refresh_tokens::table
+                .filter(app_refresh_tokens::token_hash.eq(&token_hash))
+                .filter(app_refresh_tokens::revoked_at.is_null())
+                .first::<AppRefreshToken>(&mut conn)
+                .optional()?;
+            Ok(row)
+        })
+        .await??;
+        Ok(row)
+    }
+
+    async fn revoke_app_refresh_token(&self, id: &str, replaced_by_id: Option<&str>) -> anyhow::Result<()> {
+        let id = id.to_string();
+        let replaced_by_id = replaced_by_id.map(|s| s.to_string());
+        let pool = self.pool.clone();
+        let now = time::OffsetDateTime::now_utc().to_string();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            diesel::update(app_refresh_tokens::table.find(&id))
+                .set((
+                    app_refresh_tokens::revoked_at.eq(&now),
+                    app_refresh_tokens::replaced_by_id.eq(&replaced_by_id),
+                ))
+                .execute(&mut conn)?;
             Ok(())
         })
         .await??;

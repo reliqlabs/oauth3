@@ -4,6 +4,7 @@ use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
 use crate::config::{AppConfig, decode_cookie_key};
 use std::sync::Arc;
+use url::Url;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -31,7 +32,7 @@ pub async fn run() -> anyhow::Result<()> {
     tracing::info!(
         bind_addr = %config.server.bind_addr,
         public_url = %config.server.public_url,
-        db_url = %config.db.url,
+        db_url = %redact_db_url(&config.db.url),
         "✓ Configuration loaded"
     );
 
@@ -198,6 +199,22 @@ pub fn build_router(state: AppState) -> Router {
         .route("/account/api-keys", get(crate::web::handlers::account::list_api_keys))
         .route("/account/api-keys", post(crate::web::handlers::account::create_api_key))
         .route("/account/api-keys/{key_id}", axum::routing::delete(crate::web::handlers::account::delete_api_key))
+        // Application management
+        .route("/account/apps", get(crate::web::handlers::apps::list_apps))
+        .route("/account/apps", post(crate::web::handlers::apps::create_app))
+        .route("/account/apps/{app_id}/rotate-secret", post(crate::web::handlers::apps::rotate_secret))
+        .route("/account/apps/{app_id}/redirect-uris", get(crate::web::handlers::apps::list_redirect_uris))
+        .route("/account/apps/{app_id}/redirect-uris", post(crate::web::handlers::apps::add_redirect_uri))
+        .route("/account/apps/{app_id}/redirect-uris", axum::routing::delete(crate::web::handlers::apps::remove_redirect_uri))
+        // Consent management
+        .route("/account/consents", get(crate::web::handlers::apps::list_consents))
+        .route("/account/consents/{app_id}/revoke", post(crate::web::handlers::apps::revoke_consent))
+        // OAuth application grants
+        .route("/oauth/authorize",
+            get(crate::web::handlers::oauth::authorize_get)
+                .post(crate::web::handlers::oauth::authorize_post))
+        .route("/oauth/token", post(crate::web::handlers::oauth::token))
+        .route("/oauth/revoke", post(crate::web::handlers::oauth::revoke))
         // OAuth proxy endpoint - forwards authenticated requests to provider APIs
         .route("/proxy/{provider}/{*path}",
             axum::routing::any(crate::web::proxy::proxy_request))
@@ -206,4 +223,26 @@ pub fn build_router(state: AppState) -> Router {
         .layer(middleware::from_fn(crate::web::middleware::attestation_middleware))
         .layer(CookieManagerLayer::new())
         .layer(TraceLayer::new_for_http())
+}
+
+fn redact_db_url(db_url: &str) -> String {
+    if let Ok(mut parsed) = Url::parse(db_url) {
+        if !parsed.username().is_empty() || parsed.password().is_some() {
+            let _ = parsed.set_username("****");
+            let _ = parsed.set_password(Some("****"));
+            return parsed.to_string();
+        }
+        return db_url.to_string();
+    }
+
+    if let Some(scheme_idx) = db_url.find("://") {
+        let rest = &db_url[scheme_idx + 3..];
+        if let Some(at_idx) = rest.find('@') {
+            let after_at = &rest[at_idx + 1..];
+            let prefix = &db_url[..scheme_idx + 3];
+            return format!("{}****:****@{}", prefix, after_at);
+        }
+    }
+
+    db_url.to_string()
 }

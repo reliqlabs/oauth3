@@ -74,6 +74,30 @@
     </section>
 
     <section>
+      <h2>Applications</h2>
+      <p>Register applications that can request proxy access with user consent.</p>
+      <div style="margin-top: 12px;">
+        <button onclick="showCreateAppModal()" style="background: #007aff; color: white; border-color: #007aff;">Create Application</button>
+      </div>
+      <div id="appsList" style="margin-top: 16px;">
+        <p>Loading...</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Authorized Applications</h2>
+      <p>Applications you have granted access to.</p>
+      <table style="margin-top: 12px;">
+        <thead>
+          <tr><th>App</th><th>Scopes</th><th>Granted</th><th>Status</th><th></th></tr>
+        </thead>
+        <tbody id="consents">
+          <tr><td colspan="5">Loading...</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
       <h2>API Keys</h2>
       <p>Create API keys to access the proxy endpoint programmatically from your own applications.</p>
 
@@ -110,6 +134,44 @@
     </div>
   </div>
 
+  <!-- Create Application Modal -->
+  <div id="createAppModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
+    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 24px; border-radius: 12px; min-width: 420px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+      <h3 style="margin-top: 0;">Create Application</h3>
+      <input id="appName" type="text" placeholder="App name (e.g., 'Example App')" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 12px;" />
+      <label style="display: block; margin-bottom: 8px; font-weight: 600;">Client type</label>
+      <select id="appClientType" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 12px;">
+        <option value="confidential">Confidential (server-side)</option>
+        <option value="public">Public (PKCE)</option>
+      </select>
+      <label style="display: block; margin-bottom: 8px; font-weight: 600;">Allowed scopes</label>
+      <input id="appScopes" type="text" value="proxy" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 12px;" />
+      <div style="font-size: 12px; color: #666; margin-top: -8px; margin-bottom: 12px;">
+        Space-separated scopes. Use <code style="background: #f5f5f5; padding: 2px 6px; border-radius: 4px;">proxy</code> for all providers,
+        or <code style="background: #f5f5f5; padding: 2px 6px; border-radius: 4px;">proxy:{provider}</code> /
+        <code style="background: #f5f5f5; padding: 2px 6px; border-radius: 4px;">proxy:{provider}:read</code> /
+        <code style="background: #f5f5f5; padding: 2px 6px; border-radius: 4px;">proxy:{provider}:write</code>.
+        Provider IDs are lowercase (e.g. <code style="background: #f5f5f5; padding: 2px 6px; border-radius: 4px;">google</code>, <code style="background: #f5f5f5; padding: 2px 6px; border-radius: 4px;">github</code>).
+      </div>
+      <div id="appScopesError" style="font-size: 12px; color: #ff3b30; margin-top: -8px; margin-bottom: 12px; display: none;"></div>
+      <div style="display: flex; gap: 12px;">
+        <button onclick="createApp()" style="flex: 1; background: #34c759; color: white; border-color: #34c759;">Create</button>
+        <button onclick="hideCreateAppModal()" style="flex: 1;">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Show App Secret Modal -->
+  <div id="showAppSecretModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
+    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 24px; border-radius: 12px; min-width: 500px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+      <h3 style="margin-top: 0;">Client Secret</h3>
+      <p style="color: #ff9500; font-weight: 500;">Copy this secret now. It won't be shown again.</p>
+      <div style="background: #f5f5f5; padding: 12px; border-radius: 8px; font-family: monospace; word-break: break-all; margin-bottom: 12px;" id="appSecretValue"></div>
+      <button onclick="copyAppSecret()" style="width: 100%; background: #007aff; color: white; border-color: #007aff; margin-bottom: 8px;">Copy to Clipboard</button>
+      <button onclick="hideAppSecretModal()" style="width: 100%;">Close</button>
+    </div>
+  </div>
+
   <!-- Show API Key Modal -->
   <div id="showKeyModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
     <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 24px; border-radius: 12px; min-width: 500px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
@@ -123,6 +185,16 @@
 
   <script>
     let linkedProviders = [];
+    let appsCache = [];
+
+    function escapeHtml(value) {
+      return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
 
     async function loadIdentities() {
       try {
@@ -224,6 +296,305 @@
       }
     }
 
+    async function loadApps() {
+      const container = document.getElementById('appsList');
+      try {
+        const res = await fetch('/account/apps', { credentials: 'include' });
+        if (!res.ok) {
+          container.innerHTML = '<p>Failed to load applications.</p>';
+          return;
+        }
+        const data = await res.json();
+        const apps = data.items || [];
+        appsCache = apps;
+        if (!apps.length) {
+          container.innerHTML = '<p>No applications registered.</p>';
+          return;
+        }
+
+        const redirectResults = await Promise.all(apps.map(async (app) => {
+          try {
+            const resp = await fetch(`/account/apps/${app.id}/redirect-uris`, { credentials: 'include' });
+            if (!resp.ok) { return { appId: app.id, items: [] }; }
+            const data = await resp.json();
+            return { appId: app.id, items: data.items || [] };
+          } catch (e) {
+            return { appId: app.id, items: [] };
+          }
+        }));
+
+        const redirectMap = {};
+        redirectResults.forEach(entry => { redirectMap[entry.appId] = entry.items; });
+
+        container.innerHTML = apps.map(app => {
+          const clientType = (app.client_type || '').toLowerCase();
+          const redirects = redirectMap[app.id] || [];
+          const redirectList = redirects.map(r => `
+            <li style="display: flex; gap: 8px; align-items: center; margin-bottom: 6px;">
+              <span style="flex: 1; font-family: monospace;">${escapeHtml(r.redirect_uri)}</span>
+              <button onclick="removeRedirectUri('${app.id}', '${encodeURIComponent(r.redirect_uri)}')" style="background: #ff3b30; color: white; border-color: #ff3b30;">Remove</button>
+            </li>
+          `).join('');
+
+          return `
+            <div style="border: 1px solid #eee; border-radius: 12px; padding: 16px; margin-bottom: 12px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <strong>${escapeHtml(app.name)}</strong>
+                  <div style="font-size: 12px; color: #666;">Client ID: <span style="font-family: monospace;">${escapeHtml(app.id)}</span></div>
+                </div>
+                ${clientType === 'confidential' ? `<button onclick="rotateAppSecret('${app.id}')" style="background: #ff9500; color: white; border-color: #ff9500;">Rotate Secret</button>` : ''}
+              </div>
+              <div style="margin-top: 8px; font-size: 13px; color: #444;">
+                Type: ${escapeHtml(clientType || 'unknown')} · Scopes: ${escapeHtml(app.allowed_scopes)}
+              </div>
+              <div style="margin-top: 12px;">
+                <strong>Redirect URIs</strong>
+                <ul style="padding-left: 18px; margin-top: 8px;">
+                  ${redirectList || '<li>No redirect URIs</li>'}
+                </ul>
+                <div style="display: flex; gap: 8px; margin-top: 8px;">
+                  <input id="redirectInput-${app.id}" type="text" placeholder="https://app.example.com/callback" style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 8px;" />
+                  <button onclick="addRedirectUri('${app.id}')" style="background: #34c759; color: white; border-color: #34c759;">Add</button>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('');
+      } catch (e) {
+        container.innerHTML = '<p>Failed to load applications.</p>';
+      }
+    }
+
+    function showCreateAppModal() {
+      document.getElementById('createAppModal').style.display = 'block';
+      document.getElementById('appName').value = '';
+      document.getElementById('appClientType').value = 'confidential';
+      document.getElementById('appScopes').value = 'proxy';
+      document.getElementById('appScopesError').style.display = 'none';
+    }
+
+    function hideCreateAppModal() {
+      document.getElementById('createAppModal').style.display = 'none';
+    }
+
+    function validateScopesInput(value) {
+      const tokens = value.split(/\s+/).filter(Boolean);
+      if (!tokens.length) {
+        return { ok: true, message: '' };
+      }
+      for (const token of tokens) {
+        if (token === 'proxy') {
+          continue;
+        }
+        if (!token.startsWith('proxy:')) {
+          return { ok: false, message: `Invalid scope "${token}". Use proxy or proxy:{provider}[:read|write].` };
+        }
+        const parts = token.split(':');
+        if (parts.length < 2 || parts.length > 3) {
+          return { ok: false, message: `Invalid scope "${token}". Use proxy or proxy:{provider}[:read|write].` };
+        }
+        const provider = parts[1];
+        if (!/^[a-z0-9_-]+$/.test(provider)) {
+          return { ok: false, message: `Invalid provider "${provider}". Use lowercase letters, numbers, - or _.` };
+        }
+        if (parts.length === 3 && !['read', 'write'].includes(parts[2])) {
+          return { ok: false, message: `Invalid action "${parts[2]}". Use read or write.` };
+        }
+      }
+      return { ok: true, message: '' };
+    }
+
+    function updateScopesValidation() {
+      const input = document.getElementById('appScopes');
+      const errorEl = document.getElementById('appScopesError');
+      const value = input.value.trim();
+      if (!value) {
+        errorEl.style.display = 'none';
+        return;
+      }
+      const check = validateScopesInput(value);
+      if (!check.ok) {
+        errorEl.textContent = check.message;
+        errorEl.style.display = 'block';
+      } else {
+        errorEl.style.display = 'none';
+      }
+    }
+
+    async function createApp() {
+      const name = document.getElementById('appName').value.trim();
+      const clientType = document.getElementById('appClientType').value;
+      const scopesInput = document.getElementById('appScopes');
+      const scopes = scopesInput.value.trim() || 'proxy';
+      if (!name) {
+        alert('Please enter an application name');
+        return;
+      }
+      const scopeCheck = validateScopesInput(scopes);
+      const errorEl = document.getElementById('appScopesError');
+      if (!scopeCheck.ok) {
+        errorEl.textContent = scopeCheck.message;
+        errorEl.style.display = 'block';
+        scopesInput.focus();
+        return;
+      }
+      errorEl.style.display = 'none';
+      try {
+        const res = await fetch('/account/apps', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, client_type: clientType, allowed_scopes: scopes })
+        });
+        if (!res.ok) {
+          alert('Failed to create application');
+          return;
+        }
+        const data = await res.json();
+        hideCreateAppModal();
+        if (data.client_secret) {
+          showAppSecret(data.client_secret);
+        }
+        loadApps();
+      } catch (e) {
+        alert('Error creating application: ' + e.message);
+      }
+    }
+
+    async function rotateAppSecret(appId) {
+      if (!confirm('Rotate this client secret? Existing integrations will break.')) {
+        return;
+      }
+      try {
+        const res = await fetch(`/account/apps/${appId}/rotate-secret`, {
+          method: 'POST',
+          credentials: 'include'
+        });
+        if (!res.ok) {
+          alert('Failed to rotate secret');
+          return;
+        }
+        const data = await res.json();
+        showAppSecret(data.client_secret);
+      } catch (e) {
+        alert('Error rotating secret: ' + e.message);
+      }
+    }
+
+    async function addRedirectUri(appId) {
+      const input = document.getElementById(`redirectInput-${appId}`);
+      const redirectUri = input.value.trim();
+      if (!redirectUri) {
+        alert('Please enter a redirect URI');
+        return;
+      }
+      try {
+        const res = await fetch(`/account/apps/${appId}/redirect-uris`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ redirect_uri: redirectUri })
+        });
+        if (!res.ok) {
+          alert('Failed to add redirect URI');
+          return;
+        }
+        input.value = '';
+        loadApps();
+      } catch (e) {
+        alert('Error adding redirect URI: ' + e.message);
+      }
+    }
+
+    async function removeRedirectUri(appId, encodedUri) {
+      const redirectUri = decodeURIComponent(encodedUri);
+      if (!confirm(`Remove redirect URI ${redirectUri}?`)) {
+        return;
+      }
+      try {
+        const res = await fetch(`/account/apps/${appId}/redirect-uris`, {
+          method: 'DELETE',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ redirect_uri: redirectUri })
+        });
+        if (!res.ok) {
+          alert('Failed to remove redirect URI');
+          return;
+        }
+        loadApps();
+      } catch (e) {
+        alert('Error removing redirect URI: ' + e.message);
+      }
+    }
+
+    function showAppSecret(secret) {
+      document.getElementById('appSecretValue').textContent = secret;
+      document.getElementById('showAppSecretModal').style.display = 'block';
+    }
+
+    function hideAppSecretModal() {
+      document.getElementById('showAppSecretModal').style.display = 'none';
+    }
+
+    async function copyAppSecret() {
+      const secret = document.getElementById('appSecretValue').textContent;
+      try {
+        await navigator.clipboard.writeText(secret);
+        alert('Client secret copied to clipboard!');
+      } catch (e) {
+        const textarea = document.createElement('textarea');
+        textarea.value = secret;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        alert('Client secret copied to clipboard!');
+      }
+    }
+
+    async function loadConsents() {
+      try {
+        const res = await fetch('/account/consents', { credentials: 'include' });
+        const tbl = document.getElementById('consents');
+        if (!res.ok) { tbl.innerHTML = '<tr><td colspan="5">Failed to load</td></tr>'; return; }
+        const data = await res.json();
+        const rows = (data.items || []).map(it => `
+          <tr>
+            <td>${escapeHtml(it.app_name)}</td>
+            <td>${escapeHtml(it.scopes)}</td>
+            <td>${new Date(it.created_at).toLocaleDateString()}</td>
+            <td>${it.revoked_at ? 'Revoked' : 'Active'}</td>
+            <td>
+              ${it.revoked_at ? '' : `<button onclick="revokeConsent('${it.app_id}')" style="background: #ff3b30; color: white; border-color: #ff3b30;">Revoke</button>`}
+            </td>
+          </tr>`).join('');
+        tbl.innerHTML = rows || '<tr><td colspan="5">No consents</td></tr>';
+      } catch (e) {
+        document.getElementById('consents').innerHTML = '<tr><td colspan="5">Failed to load</td></tr>';
+      }
+    }
+
+    async function revokeConsent(appId) {
+      if (!confirm('Revoke access for this application?')) {
+        return;
+      }
+      try {
+        const res = await fetch(`/account/consents/${appId}/revoke`, {
+          method: 'POST',
+          credentials: 'include'
+        });
+        if (!res.ok) {
+          alert('Failed to revoke consent');
+          return;
+        }
+        loadConsents();
+      } catch (e) {
+        alert('Error revoking consent: ' + e.message);
+      }
+    }
+
     function showCreateKeyModal() {
       document.getElementById('createKeyModal').style.display = 'block';
       document.getElementById('keyName').value = '';
@@ -307,8 +678,12 @@
       }
     }
 
+    document.getElementById('appScopes').addEventListener('input', updateScopesValidation);
+
     loadIdentities();
     loadApiKeys();
+    loadApps();
+    loadConsents();
   </script>
 </body>
 </html>

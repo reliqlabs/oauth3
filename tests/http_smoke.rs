@@ -1,11 +1,11 @@
-use axum::{body::Body, http::{Request, StatusCode}};
+use axum::{body::Body, http::{Request, StatusCode, header}};
 use tower::ServiceExt; // for `call` and `oneshot`
 use rand::RngCore;
 use base64::Engine;
 
-// Build a test app router backed by a temporary SQLite database.
-async fn test_app() -> axum::Router {
-    use oauth3::{app::{AppState, build_router}, db, repos, config as app_config};
+// Build a test app state backed by a temporary SQLite database.
+async fn test_state() -> oauth3::app::AppState {
+    use oauth3::{app::AppState, db, repos, config as app_config};
     use oauth3::db::sqlite::make_pool;
 
     // Force placeholder mode for deterministic tests (no outbound calls)
@@ -13,8 +13,9 @@ async fn test_app() -> axum::Router {
     std::env::set_var("PROVIDER_GOOGLE_MODE", "placeholder");
     std::env::set_var("PROVIDER_GOOGLE_ISSUER", "https://accounts.google.com");
 
-    // Use in-memory sqlite for tests
-    let db_path = "sqlite://:memory:".to_string();
+    // Use a temporary sqlite file so connections share the same schema.
+    let db_file = std::env::temp_dir().join(format!("oauth3-test-{}.db", uuid::Uuid::new_v4()));
+    let db_path = format!("sqlite://{}", db_file.display());
 
     // Build a minimal config
     let cfg = oauth3::config::AppConfig {
@@ -55,10 +56,13 @@ async fn test_app() -> axum::Router {
         pg: oauth3::db::pg::make_pool("").await.unwrap(), // unused under sqlite feature
     };
 
-    // Seed Google provider from PROVIDER_* env vars
+    state
+}
+
+async fn seed_google_provider(state: &oauth3::app::AppState) {
     use oauth3::models::provider::Provider;
     let now = time::OffsetDateTime::now_utc().to_string();
-    accounts.save_provider(Provider {
+    state.accounts.save_provider(Provider {
         id: "google".into(),
         name: "Google".into(),
         provider_type: "oidc".into(),
@@ -75,8 +79,89 @@ async fn test_app() -> axum::Router {
         updated_at: now.clone(),
         api_base_url: Some("https://www.googleapis.com".into()),
     }).await.expect("save provider");
+}
 
-    build_router(state)
+async fn test_app() -> axum::Router {
+    let state = test_state().await;
+    seed_google_provider(&state).await;
+    oauth3::app::build_router(state)
+}
+
+async fn seed_app_access_token(
+    state: &oauth3::app::AppState,
+    consent_revoked: bool,
+    scopes: &str,
+) -> (String, String) {
+    use diesel::prelude::*;
+    use oauth3::models::{
+        application::Application,
+        consent::UserConsent,
+        app_token::AppAccessToken,
+        user::NewUser,
+    };
+    use oauth3::schema::users;
+
+    let user_id = uuid::Uuid::new_v4().to_string();
+    let app_id = uuid::Uuid::new_v4().to_string();
+    let now = time::OffsetDateTime::now_utc();
+    let now_str = now.to_string();
+
+    let mut conn = state.sqlite.get().expect("sqlite conn");
+    diesel::insert_into(users::table)
+        .values(NewUser {
+            id: &user_id,
+            primary_email: None,
+            display_name: None,
+        })
+        .execute(&mut conn)
+        .expect("insert user");
+
+    let app = Application {
+        id: app_id.clone(),
+        owner_user_id: user_id.clone(),
+        name: "Test App".to_string(),
+        client_type: "public".to_string(),
+        client_secret_hash: None,
+        allowed_scopes: scopes.to_string(),
+        is_enabled: 1,
+        created_at: now_str.clone(),
+        updated_at: now_str.clone(),
+    };
+    state.accounts.save_application(app).await.expect("save app");
+
+    let consent = UserConsent {
+        id: uuid::Uuid::new_v4().to_string(),
+        user_id: user_id.clone(),
+        app_id: app_id.clone(),
+        scopes: scopes.to_string(),
+        created_at: now_str.clone(),
+        revoked_at: if consent_revoked { Some(now_str.clone()) } else { None },
+    };
+    state.accounts.save_user_consent(consent).await.expect("save consent");
+
+    let access_token = format!("tok_{}", uuid::Uuid::new_v4());
+    let access_hash = hash_token(&access_token);
+    let access = AppAccessToken {
+        id: uuid::Uuid::new_v4().to_string(),
+        token_hash: access_hash,
+        app_id: app_id.clone(),
+        user_id: user_id.clone(),
+        scopes: scopes.to_string(),
+        expires_at: (now + time::Duration::minutes(30)).to_string(),
+        created_at: now_str,
+        last_used_at: None,
+        revoked_at: None,
+    };
+    state.accounts.create_app_access_token(access).await.expect("save access token");
+
+    (user_id, access_token)
+}
+
+fn hash_token(value: &str) -> String {
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 #[tokio::test]
@@ -165,4 +250,87 @@ async fn placeholder_auth_sets_session_and_me_works() {
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn app_access_token_authenticates_session_user() {
+    use axum::{routing::get, response::IntoResponse, Router};
+    use oauth3::web::session::SessionUser;
+
+    async fn session_check(SessionUser { user_id, .. }: SessionUser) -> impl IntoResponse {
+        user_id
+    }
+
+    let state = test_state().await;
+    let (user_id, access_token) = seed_app_access_token(&state, false, "proxy").await;
+
+    let app = Router::new()
+        .route("/session-check", get(session_check))
+        .with_state(state);
+
+    let req = Request::builder()
+        .uri("/session-check")
+        .header(header::AUTHORIZATION, format!("Bearer {}", access_token))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+    assert_eq!(body_str, user_id);
+}
+
+#[tokio::test]
+async fn app_access_token_rejected_when_consent_revoked() {
+    use axum::{routing::get, response::IntoResponse, Router};
+    use oauth3::web::session::SessionUser;
+
+    async fn session_check(SessionUser { user_id, .. }: SessionUser) -> impl IntoResponse {
+        user_id
+    }
+
+    let state = test_state().await;
+    let (_user_id, access_token) = seed_app_access_token(&state, true, "proxy").await;
+
+    let app = Router::new()
+        .route("/session-check", get(session_check))
+        .with_state(state);
+
+    let req = Request::builder()
+        .uri("/session-check")
+        .header(header::AUTHORIZATION, format!("Bearer {}", access_token))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn app_access_token_with_provider_scope_authenticates_session_user() {
+    use axum::{routing::get, response::IntoResponse, Router};
+    use oauth3::web::session::SessionUser;
+
+    async fn session_check(SessionUser { user_id, .. }: SessionUser) -> impl IntoResponse {
+        user_id
+    }
+
+    let state = test_state().await;
+    let (user_id, access_token) = seed_app_access_token(&state, false, "proxy:google").await;
+
+    let app = Router::new()
+        .route("/session-check", get(session_check))
+        .with_state(state);
+
+    let req = Request::builder()
+        .uri("/session-check")
+        .header(header::AUTHORIZATION, format!("Bearer {}", access_token))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+    assert_eq!(body_str, user_id);
 }

@@ -56,6 +56,14 @@ fn get_tmp_cookie_name(provider: &str) -> String {
     format!("{}{}", OIDC_TMP_COOKIE_PREFIX, provider)
 }
 
+fn redirect_after_login(cookies: &Cookies, default_path: &str) -> Redirect {
+    if let Some(path) = session::take_login_return_to(cookies) {
+        Redirect::temporary(&path)
+    } else {
+        Redirect::temporary(default_path)
+    }
+}
+
 fn write_tmp_state_generic(cookies: &Cookies, key: &tower_cookies::Key, provider: &str, v: &TmpAuthState) -> anyhow::Result<()> {
     let payload = serde_json::to_string(v)?;
     let mut c = tower_cookies::Cookie::new(get_tmp_cookie_name(provider), payload);
@@ -116,6 +124,10 @@ pub async fn start(state: &AppState, cookies: Cookies, provider_key: &str) -> im
             return Redirect::temporary("/login").into_response();
         }
     };
+    if provider.is_enabled != 1 {
+        tracing::warn!(%provider_key, "provider is disabled");
+        return Redirect::temporary("/login").into_response();
+    }
     let config = ProviderConfig::from(provider);
 
     match config.mode {
@@ -155,6 +167,10 @@ pub async fn callback(state: &AppState, cookies: Cookies, provider_key: &str, q:
             return Redirect::temporary("/login").into_response();
         }
     };
+    if provider.is_enabled != 1 {
+        tracing::warn!(%provider_key, "provider is disabled (callback)");
+        return Redirect::temporary("/login").into_response();
+    }
     let config = ProviderConfig::from(provider);
 
     if matches!(config.mode, OidcMode::Live) {
@@ -201,7 +217,7 @@ pub async fn callback(state: &AppState, cookies: Cookies, provider_key: &str, q:
 
     let user_id = uuid::Uuid::new_v4().to_string();
     session::set_session(&cookies, &state.cookie_key, &user_id, 60);
-    Redirect::temporary("/").into_response()
+    redirect_after_login(&cookies, "/").into_response()
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -358,7 +374,7 @@ async fn callback_oidc_live(state: &AppState, cookies: Cookies, provider_key: &s
     if let Some(user) = state.accounts.find_user_by_identity(provider_key, &sub).await? {
         state.accounts.update_identity_tokens(provider_key, &sub, &access_token, refresh_token.as_deref(), expires_at.as_deref(), scopes.as_deref()).await?;
         session::set_session(&cookies, &state.cookie_key, &user.id, 60);
-        return Ok(Redirect::temporary("/").into_response());
+        return Ok(redirect_after_login(&cookies, "/").into_response());
     }
 
     let user_id = uuid::Uuid::new_v4().to_string();
@@ -378,7 +394,7 @@ async fn callback_oidc_live(state: &AppState, cookies: Cookies, provider_key: &s
     };
     let user = state.accounts.create_user_and_link(new_user, new_identity).await?;
     session::set_session(&cookies, &state.cookie_key, &user.id, 60);
-    Ok(Redirect::temporary("/").into_response())
+    Ok(redirect_after_login(&cookies, "/").into_response())
 }
 
 async fn start_oauth2_live(state: &AppState, cookies: Cookies, provider_key: &str, config: &ProviderConfig) -> anyhow::Result<Redirect> {
@@ -393,8 +409,11 @@ async fn start_oauth2_live(state: &AppState, cookies: Cookies, provider_key: &st
     let redirect_uri = state.oidc.redirect_url(&config.redirect_path);
     let redirect_url = RedirectUrl::new(redirect_uri)?;
 
-    let client = BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url))
-        .set_redirect_uri(redirect_url);
+    let client = apply_oauth2_auth_type(
+        provider_key,
+        BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url))
+            .set_redirect_uri(redirect_url),
+    );
 
     let (auth_url, csrf_state) = {
         let mut request = client.authorize_url(CsrfToken::new_random);
@@ -447,8 +466,11 @@ async fn callback_oauth2_live(state: &AppState, cookies: Cookies, provider_key: 
     let redirect_uri = state.oidc.redirect_url(&config.redirect_path);
     let redirect_url = RedirectUrl::new(redirect_uri.clone())?;
 
-    let client = BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url))
-        .set_redirect_uri(redirect_url);
+    let client = apply_oauth2_auth_type(
+        provider_key,
+        BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url))
+            .set_redirect_uri(redirect_url),
+    );
 
     let token_resp = match client
         .exchange_code(AuthorizationCode::new(code))
@@ -523,7 +545,7 @@ async fn fetch_github_user_and_login(
     if let Some(user) = state.accounts.find_user_by_identity("github", &sub).await? {
         state.accounts.update_identity_tokens("github", &sub, access_token, refresh_token, expires_at, scopes).await?;
         session::set_session(&cookies, &state.cookie_key, &user.id, 60);
-        return Ok(Redirect::temporary("/").into_response());
+        return Ok(redirect_after_login(&cookies, "/").into_response());
     }
 
     let user_id = uuid::Uuid::new_v4().to_string();
@@ -543,7 +565,7 @@ async fn fetch_github_user_and_login(
     };
     let user = state.accounts.create_user_and_link(new_user, new_identity).await?;
     session::set_session(&cookies, &state.cookie_key, &user.id, 60);
-    Ok(Redirect::temporary("/").into_response())
+    Ok(redirect_after_login(&cookies, "/").into_response())
 }
 
 pub async fn refresh_token(state: &AppState, provider_key: &str, subject: &str) -> anyhow::Result<()> {
@@ -592,7 +614,10 @@ pub async fn refresh_token(state: &AppState, provider_key: &str, subject: &str) 
             let auth_url = AuthUrl::new(config.auth_url.ok_or_else(|| anyhow::anyhow!("missing auth_url"))?)?;
             let token_url = TokenUrl::new(config.token_url.ok_or_else(|| anyhow::anyhow!("missing token_url"))?)?;
 
-            let client = BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url));
+            let client = apply_oauth2_auth_type(
+                provider_key,
+                BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url)),
+            );
             let token_resp = client
                 .exchange_refresh_token(&RefreshToken::new(refresh_token))
                 .request_async(async_http_client)
@@ -615,3 +640,13 @@ pub async fn refresh_token(state: &AppState, provider_key: &str, subject: &str) 
 // Use openidconnect's built-in reqwest async client function directly
 use openidconnect::reqwest::async_http_client;
 
+fn apply_oauth2_auth_type(
+    provider_key: &str,
+    client: oauth2::basic::BasicClient,
+) -> oauth2::basic::BasicClient {
+    if provider_key == "linkedin" {
+        client.set_auth_type(oauth2::AuthType::RequestBody)
+    } else {
+        client
+    }
+}

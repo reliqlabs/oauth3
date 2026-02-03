@@ -4,6 +4,11 @@ use crate::models::{
     user::{NewUser, User},
     provider::Provider,
     api_key::ApiKey,
+    application::Application,
+    app_redirect_uri::AppRedirectUri,
+    consent::UserConsent,
+    oauth_code::OAuthCode,
+    app_token::{AppAccessToken, AppRefreshToken},
 };
 
 #[async_trait]
@@ -29,6 +34,37 @@ pub trait AccountsRepo: Send + Sync {
     async fn get_api_key_by_hash(&self, key_hash: &str) -> anyhow::Result<Option<ApiKey>>;
     async fn update_api_key_last_used(&self, id: &str) -> anyhow::Result<()>;
     async fn soft_delete_api_key(&self, id: &str, user_id: &str) -> anyhow::Result<()>;
+
+    // Application operations
+    async fn list_applications(&self, owner_user_id: &str) -> anyhow::Result<Vec<Application>>;
+    async fn get_application(&self, id: &str) -> anyhow::Result<Option<Application>>;
+    async fn save_application(&self, app: Application) -> anyhow::Result<()>;
+
+    // Redirect URI operations
+    async fn list_app_redirect_uris(&self, app_id: &str) -> anyhow::Result<Vec<AppRedirectUri>>;
+    async fn add_app_redirect_uri(&self, redirect_uri: AppRedirectUri) -> anyhow::Result<()>;
+    async fn remove_app_redirect_uri(&self, app_id: &str, redirect_uri: &str) -> anyhow::Result<usize>;
+
+    // Consent operations
+    async fn get_user_consent(&self, user_id: &str, app_id: &str) -> anyhow::Result<Option<UserConsent>>;
+    async fn list_user_consents(&self, user_id: &str) -> anyhow::Result<Vec<UserConsent>>;
+    async fn save_user_consent(&self, consent: UserConsent) -> anyhow::Result<()>;
+    async fn revoke_user_consent(&self, user_id: &str, app_id: &str) -> anyhow::Result<()>;
+
+    // OAuth authorization codes
+    async fn create_oauth_code(&self, code: OAuthCode) -> anyhow::Result<()>;
+    async fn consume_oauth_code(&self, code_hash: &str) -> anyhow::Result<Option<OAuthCode>>;
+
+    // App access tokens
+    async fn create_app_access_token(&self, token: AppAccessToken) -> anyhow::Result<()>;
+    async fn get_app_access_token_by_hash(&self, token_hash: &str) -> anyhow::Result<Option<AppAccessToken>>;
+    async fn update_app_access_token_last_used(&self, id: &str) -> anyhow::Result<()>;
+    async fn revoke_app_access_token(&self, id: &str) -> anyhow::Result<()>;
+
+    // App refresh tokens
+    async fn create_app_refresh_token(&self, token: AppRefreshToken) -> anyhow::Result<()>;
+    async fn get_app_refresh_token_by_hash(&self, token_hash: &str) -> anyhow::Result<Option<AppRefreshToken>>;
+    async fn revoke_app_refresh_token(&self, id: &str, replaced_by_id: Option<&str>) -> anyhow::Result<()>;
 }
 
 #[cfg(feature = "pg")]

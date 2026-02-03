@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1"
 thiserror = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -11,9 +12,11 @@ base64 = "0.22"
 sha2 = { version = "0.10", default-features = false }
 hex = { version = "0.4", default-features = false, features = ["alloc", "std"] }
 dcap-qvl = "0.3"
-tokio = { version = "1", features = ["rt"] }
-anyhow = "1"
-parity-scale-codec = "3"
+tokio = { version = "1", features = ["rt", "macros", "fs", "process"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tempfile = "3"
+fs-err = "3"
+tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }

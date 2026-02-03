@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{OriginalUri, Path, State},
     http::{HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -19,10 +19,11 @@ use crate::{
 /// Automatically handles token refresh and injects OAuth credentials.
 pub async fn proxy_request(
     State(state): State<AppState>,
-    SessionUser(user_id): SessionUser,
+    SessionUser { user_id, scopes }: SessionUser,
     Path((provider_key, path)): Path<(String, String)>,
     method: Method,
     headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     body: Body,
 ) -> Result<Response, ProxyError> {
     tracing::info!(
@@ -32,6 +33,15 @@ pub async fn proxy_request(
         method = %method,
         "Starting proxy request"
     );
+
+    if !scope_allows_provider(scopes.as_deref(), &provider_key) {
+        tracing::warn!(
+            user_id = %user_id,
+            provider = %provider_key,
+            "Token scope does not allow proxy access to provider"
+        );
+        return Err(ProxyError::InsufficientScope(provider_key));
+    }
 
     // Get user's identity for this provider
     let identity = state
@@ -72,6 +82,10 @@ pub async fn proxy_request(
             tracing::error!(provider = %provider_key, "Provider config not found");
             ProxyError::ProviderNotFound(provider_key.clone())
         })?;
+    if provider.is_enabled != 1 {
+        tracing::warn!(provider = %provider_key, "Provider is disabled");
+        return Err(ProxyError::ProviderDisabled(provider_key));
+    }
 
     // Get API base URL from provider config
     let api_base = provider.api_base_url
@@ -81,7 +95,11 @@ pub async fn proxy_request(
         })?;
 
     // Build target URL
-    let target_url = format!("{}/{}", api_base.trim_end_matches('/'), path.trim_start_matches('/'));
+    let base_url = format!("{}/{}", api_base.trim_end_matches('/'), path.trim_start_matches('/'));
+    let target_url = match uri.query().filter(|q| !q.is_empty()) {
+        Some(query) => format!("{}?{}", base_url, query),
+        None => base_url,
+    };
 
     tracing::info!(
         user_id = %user_id,
@@ -116,6 +134,24 @@ fn needs_refresh(identity: &crate::models::identity::UserIdentity) -> bool {
             // Refresh if expiring within 5 minutes
             let now = OffsetDateTime::now_utc();
             return (expires - now).whole_seconds() < 300;
+        }
+    }
+    false
+}
+
+fn scope_allows_provider(scopes: Option<&str>, provider: &str) -> bool {
+    let Some(scopes) = scopes else {
+        return true;
+    };
+    let provider_prefix = format!("{}:", provider);
+    for scope in scopes.split_whitespace() {
+        if scope == "proxy" {
+            return true;
+        }
+        if let Some(rest) = scope.strip_prefix("proxy:") {
+            if rest == provider || rest.starts_with(&provider_prefix) {
+                return true;
+            }
         }
     }
     false
@@ -201,9 +237,11 @@ async fn forward_request(
 pub enum ProxyError {
     ProviderNotLinked(String),
     ProviderNotFound(String),
+    ProviderDisabled(String),
     NoAccessToken,
     NoApiBaseUrl,
     TokenExpired,
+    InsufficientScope(String),
     UpstreamError(String),
     Internal(String),
 }
@@ -221,6 +259,10 @@ impl IntoResponse for ProxyError {
                 StatusCode::NOT_FOUND,
                 format!("Provider '{}' not configured", provider),
             ),
+            ProxyError::ProviderDisabled(provider) => (
+                StatusCode::FORBIDDEN,
+                format!("Provider '{}' is disabled", provider),
+            ),
             ProxyError::NoAccessToken => (
                 StatusCode::UNAUTHORIZED,
                 "No access token available for this provider".to_string(),
@@ -233,6 +275,10 @@ impl IntoResponse for ProxyError {
                 StatusCode::UNAUTHORIZED,
                 "Access token expired and refresh not yet implemented".to_string(),
             ),
+            ProxyError::InsufficientScope(provider) => (
+                StatusCode::FORBIDDEN,
+                format!("Token scope does not allow access to provider '{}'", provider),
+            ),
             ProxyError::UpstreamError(err) => (
                 StatusCode::BAD_GATEWAY,
                 format!("Upstream provider error: {}", err),
@@ -244,5 +290,28 @@ impl IntoResponse for ProxyError {
         };
 
         (status, Json(json!({ "error": message }))).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scope_allows_provider;
+
+    #[test]
+    fn scope_allows_provider_for_session_cookie() {
+        assert!(scope_allows_provider(None, "google"));
+    }
+
+    #[test]
+    fn scope_allows_provider_for_proxy_scope() {
+        assert!(scope_allows_provider(Some("proxy"), "google"));
+        assert!(scope_allows_provider(Some("proxy other"), "github"));
+    }
+
+    #[test]
+    fn scope_allows_provider_for_provider_scopes() {
+        assert!(scope_allows_provider(Some("proxy:google"), "google"));
+        assert!(scope_allows_provider(Some("proxy:google:read"), "google"));
+        assert!(!scope_allows_provider(Some("proxy:google"), "github"));
     }
 }

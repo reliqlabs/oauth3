@@ -2,3 +2,8 @@ pub mod user;
 pub mod identity;
 pub mod provider;
 pub mod api_key;
+pub mod application;
+pub mod app_redirect_uri;
+pub mod consent;
+pub mod oauth_code;
+pub mod app_token;

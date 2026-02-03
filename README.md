@@ -7,6 +7,7 @@ Rust web service that provides OAuth/OIDC authentication and proxies authenticat
 - **OAuth Proxy** - Authenticated proxy to provider APIs (Google, GitHub, etc.)
 - **TEE Attestation** - Optional TDX attestation for requests in trusted execution environments
 - **Multi-Provider SSO** - Google OIDC, GitHub OAuth2, Dex (local testing)
+- **OAuth App Grants** - Authorization code + PKCE flows for third-party apps, with scoped proxy access
 - **API Key Authentication** - Bearer token support for external apps (scope-limited, soft-delete)
 - **Account Management** - Link/unlink OAuth providers, manage API keys
 - **Reproducible Builds** - Nix-based builds for TEE verification
@@ -15,6 +16,7 @@ Rust web service that provides OAuth/OIDC authentication and proxies authenticat
 ## Documentation
 
 - **[TEE Attestation](docs/attestation.md)** - Phala Cloud TDX attestation integration
+- **[OAuth Applications](docs/oauth-apps.md)** - App registration, consent, and proxy scopes
 - **[Reproducible Builds](docs/nix-builds.md)** - Nix-based reproducible builds
 - **[Deployment](DEPLOYMENT.md)** - Phala Cloud and self-hosted deployment
 
