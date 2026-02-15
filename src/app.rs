@@ -215,6 +215,9 @@ pub fn build_router(state: AppState) -> Router {
                 .post(crate::web::handlers::oauth::authorize_post))
         .route("/oauth/token", post(crate::web::handlers::oauth::token))
         .route("/oauth/revoke", post(crate::web::handlers::oauth::revoke))
+        // Gmail verification (TDX-attested)
+        .route("/verify/gmail", post(crate::web::handlers::verify::verify_gmail))
+        .route("/attestation-key", get(crate::web::handlers::verify::attestation_key))
         // OAuth proxy endpoint - forwards authenticated requests to provider APIs
         .route("/proxy/{provider}/{*path}",
             axum::routing::any(crate::web::proxy::proxy_request))
