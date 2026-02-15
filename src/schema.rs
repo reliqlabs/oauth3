@@ -1,16 +1,15 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
-    applications (id) {
+    api_keys (id) {
         id -> Text,
-        owner_user_id -> Text,
+        user_id -> Text,
         name -> Text,
-        client_type -> Text,
-        client_secret_hash -> Nullable<Text>,
-        allowed_scopes -> Text,
-        is_enabled -> Integer,
+        key_hash -> Text,
+        scopes -> Text,
         created_at -> Text,
-        updated_at -> Text,
+        last_used_at -> Nullable<Text>,
+        deleted_at -> Nullable<Text>,
     }
 }
 
@@ -53,15 +52,16 @@ diesel::table! {
 }
 
 diesel::table! {
-    api_keys (id) {
+    applications (id) {
         id -> Text,
-        user_id -> Text,
+        owner_user_id -> Text,
         name -> Text,
-        key_hash -> Text,
-        scopes -> Text,
+        client_type -> Text,
+        client_secret_hash -> Nullable<Text>,
+        allowed_scopes -> Text,
+        is_enabled -> Integer,
         created_at -> Text,
-        last_used_at -> Nullable<Text>,
-        deleted_at -> Nullable<Text>,
+        updated_at -> Text,
     }
 }
 
@@ -138,13 +138,13 @@ diesel::table! {
     }
 }
 
-diesel::joinable!(applications -> users (owner_user_id));
+diesel::joinable!(api_keys -> users (user_id));
 diesel::joinable!(app_access_tokens -> applications (app_id));
 diesel::joinable!(app_access_tokens -> users (user_id));
 diesel::joinable!(app_redirect_uris -> applications (app_id));
 diesel::joinable!(app_refresh_tokens -> applications (app_id));
 diesel::joinable!(app_refresh_tokens -> users (user_id));
-diesel::joinable!(api_keys -> users (user_id));
+diesel::joinable!(applications -> users (owner_user_id));
 diesel::joinable!(oauth_codes -> applications (app_id));
 diesel::joinable!(oauth_codes -> users (user_id));
 diesel::joinable!(user_consents -> applications (app_id));
@@ -152,11 +152,11 @@ diesel::joinable!(user_consents -> users (user_id));
 diesel::joinable!(user_identities -> users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
-    applications,
+    api_keys,
     app_access_tokens,
     app_redirect_uris,
     app_refresh_tokens,
-    api_keys,
+    applications,
     oauth_codes,
     oauth_providers,
     user_consents,
