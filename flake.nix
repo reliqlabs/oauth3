@@ -98,6 +98,8 @@
             postgresql
             bashInteractive
             coreutils
+            # libpq needs /etc/passwd to resolve UID 0 → username
+            fakeNss
           ];
 
           config = {
