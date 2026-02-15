@@ -21,4 +21,7 @@ else
     echo "No Docker credentials found, using public registry"
 fi
 
+# Always pull latest images before docker compose up
+echo "Pulling latest images..."
+docker compose pull
 echo "Pre-launch complete, handing off to docker compose"
