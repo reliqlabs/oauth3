@@ -85,13 +85,18 @@ impl DstackClient {
 
         #[derive(Serialize)]
         struct GetQuoteRequest {
-            #[serde(rename = "reportData")]
             report_data: String,
         }
 
         let request_body = GetQuoteRequest {
-            report_data: format!("0x{}", hex_data),
+            report_data: hex_data.clone(),
         };
+
+        tracing::debug!(
+            report_data_hex = %hex_data,
+            report_data_len = hex_data.len(),
+            "Requesting TDX quote from dstack"
+        );
 
         let client = get_dstack_client();
 
