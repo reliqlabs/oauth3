@@ -56,9 +56,17 @@ fn get_tmp_cookie_name(provider: &str) -> String {
     format!("{}{}", OIDC_TMP_COOKIE_PREFIX, provider)
 }
 
-fn redirect_after_login(cookies: &Cookies, default_path: &str) -> Redirect {
+fn redirect_after_login(cookies: &Cookies, config: &crate::config::AppConfig, user_id: &str, default_path: &str) -> Redirect {
     if let Some(path) = session::take_login_return_to(cookies) {
-        Redirect::temporary(&path)
+        // For cross-domain return_to URLs, append a signed session token
+        // so the calling app can authenticate with OAuth3 via Bearer token.
+        if let Some(token) = session::create_session_token(config, user_id) {
+            let separator = if path.contains('?') { "&" } else { "?" };
+            let url = format!("{}{}token={}", path, separator, urlencoding::encode(&token));
+            Redirect::temporary(&url)
+        } else {
+            Redirect::temporary(&path)
+        }
     } else {
         Redirect::temporary(default_path)
     }
@@ -217,7 +225,7 @@ pub async fn callback(state: &AppState, cookies: Cookies, provider_key: &str, q:
 
     let user_id = uuid::Uuid::new_v4().to_string();
     session::set_session(&cookies, &state.cookie_key, &user_id, 60);
-    redirect_after_login(&cookies, "/").into_response()
+    redirect_after_login(&cookies, &state.config, &user_id, "/").into_response()
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -374,27 +382,27 @@ async fn callback_oidc_live(state: &AppState, cookies: Cookies, provider_key: &s
     if let Some(user) = state.accounts.find_user_by_identity(provider_key, &sub).await? {
         state.accounts.update_identity_tokens(provider_key, &sub, &access_token, refresh_token.as_deref(), expires_at.as_deref(), scopes.as_deref()).await?;
         session::set_session(&cookies, &state.cookie_key, &user.id, 60);
-        return Ok(redirect_after_login(&cookies, "/").into_response());
+        return Ok(redirect_after_login(&cookies, &state.config, &user.id, "/").into_response());
     }
 
     let user_id = uuid::Uuid::new_v4().to_string();
     let identity_id = uuid::Uuid::new_v4().to_string();
     let new_user = crate::models::user::NewUser { id: &user_id, primary_email: email.as_deref(), display_name: name.as_deref() };
-    let new_identity = NewIdentity { 
-        id: &identity_id, 
-        user_id: &user_id, 
-        provider_key, 
-        subject: &sub, 
-        email: email.as_deref(), 
+    let new_identity = NewIdentity {
+        id: &identity_id,
+        user_id: &user_id,
+        provider_key,
+        subject: &sub,
+        email: email.as_deref(),
         access_token: Some(&access_token),
         refresh_token: refresh_token.as_deref(),
         expires_at: expires_at.as_deref(),
         scopes: scopes.as_deref(),
-        claims: None 
+        claims: None
     };
     let user = state.accounts.create_user_and_link(new_user, new_identity).await?;
     session::set_session(&cookies, &state.cookie_key, &user.id, 60);
-    Ok(redirect_after_login(&cookies, "/").into_response())
+    Ok(redirect_after_login(&cookies, &state.config, &user.id, "/").into_response())
 }
 
 async fn start_oauth2_live(state: &AppState, cookies: Cookies, provider_key: &str, config: &ProviderConfig) -> anyhow::Result<Redirect> {
@@ -545,27 +553,27 @@ async fn fetch_github_user_and_login(
     if let Some(user) = state.accounts.find_user_by_identity("github", &sub).await? {
         state.accounts.update_identity_tokens("github", &sub, access_token, refresh_token, expires_at, scopes).await?;
         session::set_session(&cookies, &state.cookie_key, &user.id, 60);
-        return Ok(redirect_after_login(&cookies, "/").into_response());
+        return Ok(redirect_after_login(&cookies, &state.config, &user.id, "/").into_response());
     }
 
     let user_id = uuid::Uuid::new_v4().to_string();
     let identity_id = uuid::Uuid::new_v4().to_string();
     let new_user = crate::models::user::NewUser { id: &user_id, primary_email: email.as_deref(), display_name: name.as_deref() };
-    let new_identity = NewIdentity { 
-        id: &identity_id, 
-        user_id: &user_id, 
-        provider_key: "github", 
-        subject: &sub, 
-        email: email.as_deref(), 
+    let new_identity = NewIdentity {
+        id: &identity_id,
+        user_id: &user_id,
+        provider_key: "github",
+        subject: &sub,
+        email: email.as_deref(),
         access_token: Some(access_token),
         refresh_token,
         expires_at,
         scopes,
-        claims: None 
+        claims: None
     };
     let user = state.accounts.create_user_and_link(new_user, new_identity).await?;
     session::set_session(&cookies, &state.cookie_key, &user.id, 60);
-    Ok(redirect_after_login(&cookies, "/").into_response())
+    Ok(redirect_after_login(&cookies, &state.config, &user.id, "/").into_response())
 }
 
 pub async fn refresh_token(state: &AppState, provider_key: &str, subject: &str) -> anyhow::Result<()> {

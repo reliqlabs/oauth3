@@ -91,6 +91,13 @@ impl FromRequestParts<AppState> for SessionUser {
 }
 
 async fn authenticate_with_bearer(token: &str, state: &AppState) -> Result<AuthInfo, Response> {
+    // Try HMAC session token first (has a '.' separator)
+    if token.contains('.') {
+        if let Some(user_id) = session::verify_session_token(&state.config, token) {
+            return Ok(AuthInfo { user_id, scopes: None });
+        }
+    }
+
     match authenticate_with_api_key(token, state).await? {
         Some(user) => Ok(user),
         None => authenticate_with_app_access_token(token, state).await,
