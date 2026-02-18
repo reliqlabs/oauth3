@@ -3,7 +3,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::attestation::DstackClient;
-use dstack_verifier::{AttestationVerifier, AttestationResponse as DstackAttestation, InfoResponse as DstackInfo};
+use dstack_verifier::{AttestationVerifier, AttestationResponse as DstackAttestation};
 
 /// Standard Phala Cloud attestation response
 /// Follows pattern from https://docs.phala.com/phala-cloud/phala-cloud-user-guides/building-with-tee/generate-ra-report
@@ -96,8 +96,6 @@ fn get_app_info() -> InfoResponse {
 pub struct VerifyRequest {
     /// Attestation data (quote, event log, vm config)
     pub attestation: DstackAttestation,
-    /// Application info to verify against quote
-    pub info: DstackInfo,
 }
 
 /// POST /verify
@@ -130,7 +128,7 @@ pub async fn verify(
 
     // Perform verification
     let result = verifier
-        .verify_attestation(&request.attestation, &request.info)
+        .verify_attestation(&request.attestation)
         .await
         .map_err(|e| {
             tracing::error!(error = ?e, "Verification failed");

@@ -24,7 +24,7 @@ services:
       # Mount dstack socket for TEE operations
       - /var/run/dstack.sock:/var/run/dstack.sock
     environment:
-      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/oauth3
+      DATABASE_URL: ${DATABASE_URL}
       APP_BIND_ADDR: ${APP_BIND_ADDR:-0.0.0.0:8080}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL}
       COOKIE_KEY_BASE64: ${COOKIE_KEY_BASE64}
@@ -38,6 +38,10 @@ services:
       PROVIDER_GOOGLE_ISSUER: ${PROVIDER_GOOGLE_ISSUER}
       PROVIDER_GOOGLE_SCOPES: ${PROVIDER_GOOGLE_SCOPES}
       PROVIDER_GOOGLE_API_BASE_URL: ${PROVIDER_GOOGLE_API_BASE_URL}
+      # Registry credentials (consumed by Phala pre-launch script for docker login)
+      DSTACK_DOCKER_REGISTRY: ${DSTACK_DOCKER_REGISTRY:-}
+      DSTACK_DOCKER_USERNAME: ${DSTACK_DOCKER_USERNAME:-}
+      DSTACK_DOCKER_PASSWORD: ${DSTACK_DOCKER_PASSWORD:-}
     ports:
       - "8080:8080"
 

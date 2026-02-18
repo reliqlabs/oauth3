@@ -69,10 +69,8 @@ fi
 # Optional variables with defaults
 TEEPOD_ID="${TEEPOD_ID:-}"
 CVM_NAME="${CVM_NAME:-oauth3-prod}"
-VCPU="${VCPU:-2}"
-MEMORY="${MEMORY:-4096}"
-DISK_SIZE="${DISK_SIZE:-60}"
-DSTACK_IMAGE="${DSTACK_IMAGE:-dstack-dev-0.5.5}"
+INSTANCE_TYPE="${INSTANCE_TYPE:-}"
+DISK_SIZE="${DISK_SIZE:-60G}"
 
 # Apply defaults for docker-compose variables (Phala doesn't support ${VAR:-default} syntax)
 : "${APP_BIND_ADDR:=0.0.0.0:8080}"
@@ -119,21 +117,23 @@ CMD=(
   phala deploy
   --name "$CVM_NAME"
   --compose ./docker-compose.phala.yml
-  --vcpu "$VCPU"
-  --memory "$MEMORY"
   --disk-size "$DISK_SIZE"
-  --image "$DSTACK_IMAGE"
-  --env-file "$TEMP_ENV_FILE"
+  -e "$TEMP_ENV_FILE"
 )
 
-# Add app-id if specified
+# Add instance type if specified
+if [[ -n "$INSTANCE_TYPE" ]]; then
+  CMD+=(--instance-type "$INSTANCE_TYPE")
+fi
+
+# Add app-id if specified (for updates)
 if [[ -n "$APP_ID" ]]; then
   CMD+=(--cvm-id "$APP_ID")
 fi
 
-# Add teepod if specified
+# Add node if specified
 if [[ -n "$TEEPOD_ID" ]]; then
-  CMD+=(--teepod-id "$TEEPOD_ID")
+  CMD+=(--node-id "$TEEPOD_ID")
 fi
 
 # Print the command
