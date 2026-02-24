@@ -16,19 +16,14 @@ pub struct VerifyRequest {
 
 /// Fields are alphabetically ordered for deterministic serde serialization.
 /// The contract parses this same struct and verifies address == tx sender.
+/// Email is intentionally excluded — it would be visible in the on-chain tx payload.
 #[derive(Serialize)]
 struct CanonicalResult {
     address: String,
     clean: bool,
-    email: String,
     message_count: u64,
     suspect: String,
     timestamp: u64,
-}
-
-#[derive(Deserialize)]
-struct GoogleUserInfo {
-    email: String,
 }
 
 #[derive(Deserialize)]
@@ -74,8 +69,8 @@ pub async fn verify_gmail(
 
     let http = reqwest::Client::new();
 
-    // Get the user's email from Google
-    let userinfo: GoogleUserInfo = http
+    // Verify the access token is still valid (userinfo call validates it)
+    let _userinfo_status = http
         .get("https://www.googleapis.com/oauth2/v2/userinfo")
         .bearer_auth(&access_token)
         .send()
@@ -87,13 +82,12 @@ pub async fn verify_gmail(
                 Json(json!({"error": "Failed to call Google userinfo API"})),
             )
         })?
-        .json()
-        .await
+        .error_for_status()
         .map_err(|e| {
-            tracing::error!(error = ?e, "Failed to parse Google userinfo response");
+            tracing::error!(error = ?e, "Google access token is invalid or expired");
             (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({"error": "Failed to parse Google userinfo response"})),
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Google access token is invalid or expired"})),
             )
         })?;
 
@@ -140,7 +134,6 @@ pub async fn verify_gmail(
     let result = CanonicalResult {
         address: req.address,
         clean: gmail_resp.result_size_estimate == 0,
-        email: userinfo.email,
         message_count: gmail_resp.result_size_estimate,
         suspect: req.suspect,
         timestamp,
