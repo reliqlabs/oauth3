@@ -126,14 +126,15 @@ pub async fn verify_gmail(
         "https://oauth2.googleapis.com/revoke?token={}",
         urlencoding::encode(&access_token)
     );
-    if let Err(e) = http.post(&revoke_url).send().await {
-        // Log but don't fail — the token will expire on its own
-        tracing::warn!(error = ?e, "Failed to revoke Google access token");
+    match http.post(&revoke_url).send().await {
+        Ok(_) => tracing::info!("Google access token revoked successfully"),
+        Err(e) => tracing::warn!(error = ?e, "Failed to revoke Google access token"),
     }
 
     // Remove the stored Google identity (access/refresh tokens) from the database
-    if let Err(e) = state.accounts.unlink_identity_by_provider(&user_id, "google").await {
-        tracing::warn!(error = ?e, "Failed to unlink Google identity after verification");
+    match state.accounts.unlink_identity_by_provider(&user_id, "google").await {
+        Ok(_) => tracing::info!("Google identity unlinked successfully"),
+        Err(e) => tracing::warn!(error = ?e, "Failed to unlink Google identity after verification"),
     }
 
     let timestamp = SystemTime::now()
