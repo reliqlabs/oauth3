@@ -23,7 +23,8 @@ async fn render_login(state: &AppState) -> anyhow::Result<String> {
         buttons.push_str(&format!(
             r#"      <a class="btn" href="/auth/{}">{}</a>
 "#,
-            p.id, p.name
+            crate::web::handlers::oauth::escape_html(&p.id),
+            crate::web::handlers::oauth::escape_html(&p.name)
         ));
     }
 

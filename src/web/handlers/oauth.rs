@@ -411,7 +411,7 @@ async fn issue_auth_code(state: &AppState, user_id: &str, ctx: &AuthorizeContext
         scopes: ctx.scope_string.clone(),
         code_challenge: ctx.code_challenge.clone(),
         code_challenge_method: ctx.code_challenge_method.clone(),
-        expires_at: expires_at.to_string(),
+        expires_at: format_rfc3339(expires_at),
         created_at: now.to_string(),
         consumed_at: None,
     };
@@ -446,7 +446,7 @@ async fn issue_tokens(
         app_id: app_id.to_string(),
         user_id: user_id.to_string(),
         scopes: scopes.to_string(),
-        expires_at: access_expires.to_string(),
+        expires_at: format_rfc3339(access_expires),
         created_at: now.to_string(),
         last_used_at: None,
         revoked_at: None,
@@ -459,7 +459,7 @@ async fn issue_tokens(
         app_id: app_id.to_string(),
         user_id: user_id.to_string(),
         scopes: scopes.to_string(),
-        expires_at: refresh_expires.to_string(),
+        expires_at: format_rfc3339(refresh_expires),
         created_at: now.to_string(),
         revoked_at: None,
         rotation_parent_id: rotate_refresh_id.map(|s| s.to_string()),
@@ -681,7 +681,7 @@ fn render_consent_page(ctx: &AuthorizeContext) -> String {
     )
 }
 
-fn escape_html(value: &str) -> String {
+pub(crate) fn escape_html(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
         match ch {
@@ -713,7 +713,14 @@ fn is_expired(timestamp: &str) -> bool {
     if let Ok(expires) = OffsetDateTime::parse(timestamp, &time::format_description::well_known::Rfc3339) {
         return OffsetDateTime::now_utc() > expires;
     }
-    false
+    // Unparseable timestamps are treated as expired (fail closed)
+    true
+}
+
+/// Format an OffsetDateTime as RFC 3339 for consistent timestamp storage.
+fn format_rfc3339(dt: OffsetDateTime) -> String {
+    dt.format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| dt.to_string())
 }
 
 fn verify_pkce(challenge: &str, method: Option<&str>, verifier: &str) -> bool {

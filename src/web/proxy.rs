@@ -94,12 +94,25 @@ pub async fn proxy_request(
             ProxyError::NoApiBaseUrl
         })?;
 
+    // Validate path does not contain directory traversal or host confusion
+    if path.contains("..") || path.starts_with("//") || path.contains('@') {
+        return Err(ProxyError::Internal("Invalid path".to_string()));
+    }
+
     // Build target URL
     let base_url = format!("{}/{}", api_base.trim_end_matches('/'), path.trim_start_matches('/'));
     let target_url = match uri.query().filter(|q| !q.is_empty()) {
         Some(query) => format!("{}?{}", base_url, query),
         None => base_url,
     };
+
+    // Verify the final URL's host still matches the configured API base host (SSRF protection)
+    if let (Ok(target_parsed), Ok(base_parsed)) = (url::Url::parse(&target_url), url::Url::parse(&api_base)) {
+        if target_parsed.host() != base_parsed.host() {
+            tracing::error!(target = %target_url, base = %api_base, "Proxy target host mismatch");
+            return Err(ProxyError::Internal("Target host mismatch".to_string()));
+        }
+    }
 
     tracing::info!(
         user_id = %user_id,
@@ -128,13 +141,14 @@ pub async fn proxy_request(
 /// Check if token needs refresh based on expires_at
 fn needs_refresh(identity: &crate::models::identity::UserIdentity) -> bool {
     if let Some(expires_at) = &identity.expires_at {
-        // Parse ISO8601 timestamp using time crate
         use time::OffsetDateTime;
         if let Ok(expires) = OffsetDateTime::parse(expires_at, &time::format_description::well_known::Rfc3339) {
             // Refresh if expiring within 5 minutes
             let now = OffsetDateTime::now_utc();
             return (expires - now).whole_seconds() < 300;
         }
+        // Unparseable timestamp — treat as needing refresh (fail closed)
+        return true;
     }
     false
 }
@@ -181,8 +195,9 @@ async fn forward_request(
     headers.remove("connection");
     headers.remove("transfer-encoding");
 
-    // Convert axum body to bytes
-    let body_bytes = axum::body::to_bytes(body, usize::MAX)
+    // Convert axum body to bytes (10 MB limit to prevent OOM)
+    const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
+    let body_bytes = axum::body::to_bytes(body, MAX_BODY_SIZE)
         .await
         .map_err(|e| ProxyError::Internal(format!("Failed to read request body: {}", e)))?;
 

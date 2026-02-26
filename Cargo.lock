@@ -2292,6 +2292,7 @@ dependencies = [
  "dotenvy",
  "dstack-verifier",
  "hex",
+ "hmac",
  "http-body-util",
  "jsonwebtoken",
  "oauth2",

@@ -2,7 +2,7 @@ use serde::Deserialize;
 use base64::Engine as _;
 use rand::RngCore;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct ServerCfg {
     #[serde(default = "default_bind_addr")]
     pub bind_addr: String,
@@ -12,10 +12,28 @@ pub struct ServerCfg {
     pub cookie_key_base64: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+impl std::fmt::Debug for ServerCfg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerCfg")
+            .field("bind_addr", &self.bind_addr)
+            .field("public_url", &self.public_url)
+            .field("cookie_key_base64", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Deserialize)]
 pub struct DbCfg {
     /// e.g. sqlite://dev.db or postgres://user:pass@host:5432/db
     pub url: String,
+}
+
+impl std::fmt::Debug for DbCfg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DbCfg")
+            .field("url", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -73,10 +91,25 @@ pub fn decode_cookie_key(b64: &str) -> anyhow::Result<[u8; 64]> {
         .decode(b64.as_bytes())
         .map_err(|e| anyhow::anyhow!("invalid COOKIE_KEY_BASE64: {}", e))?;
     if bytes.len() == 32 {
-        // If user supplied 32 bytes, duplicate to make 64 (sign + encrypt)
+        // Derive two independent subkeys using HMAC-SHA256 for domain separation.
+        // Using the same key for both signing and encryption weakens security.
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+
+        let mut signing = HmacSha256::new_from_slice(&bytes)
+            .map_err(|e| anyhow::anyhow!("HMAC key derivation error: {}", e))?;
+        signing.update(b"cookie-signing-key");
+        let signing_key = signing.finalize().into_bytes();
+
+        let mut encrypt = HmacSha256::new_from_slice(&bytes)
+            .map_err(|e| anyhow::anyhow!("HMAC key derivation error: {}", e))?;
+        encrypt.update(b"cookie-encryption-key");
+        let encrypt_key = encrypt.finalize().into_bytes();
+
         let mut out = [0u8; 64];
-        out[..32].copy_from_slice(&bytes);
-        out[32..].copy_from_slice(&bytes);
+        out[..32].copy_from_slice(&signing_key);
+        out[32..].copy_from_slice(&encrypt_key);
         return Ok(out);
     }
     if bytes.len() != 64 {

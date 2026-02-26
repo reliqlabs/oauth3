@@ -8,10 +8,17 @@ use crate::app::AppState;
 use crate::attestation::DstackClient;
 use crate::web::session::SessionUser;
 
+/// The target suspect email — hardcoded to prevent client-side bypass.
+/// The frontend also sends this value, but we ignore it server-side.
+const SUSPECT_EMAIL: &str = "jeevacation@gmail.com";
+
 #[derive(Deserialize)]
 pub struct VerifyRequest {
     address: String,
-    suspect: String,
+    /// Ignored server-side; the suspect email is hardcoded in SUSPECT_EMAIL.
+    #[serde(default)]
+    #[allow(dead_code)]
+    suspect: Option<String>,
 }
 
 /// Fields are alphabetically ordered for deterministic serde serialization.
@@ -91,10 +98,10 @@ pub async fn verify_gmail(
             )
         })?;
 
-    // Search Gmail for messages from the suspect
+    // Search Gmail for messages from the hardcoded suspect email
     let gmail_url = format!(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=from:{}&maxResults=1",
-        urlencoding::encode(&req.suspect)
+        urlencoding::encode(SUSPECT_EMAIL)
     );
     let gmail_resp: GmailListResponse = http
         .get(&gmail_url)
@@ -141,19 +148,11 @@ pub async fn verify_gmail(
         .unwrap()
         .as_secs();
 
-    // Validate suspect is a plausible email (prevent Gmail search operator injection)
-    if !req.suspect.contains('@') || req.suspect.len() > 254 || req.suspect.contains('{') || req.suspect.contains('}') {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "Invalid suspect email address"})),
-        ));
-    }
-
     let result = CanonicalResult {
         address: req.address,
         clean: gmail_resp.result_size_estimate == 0,
         message_count: gmail_resp.result_size_estimate,
-        suspect: req.suspect,
+        suspect: SUSPECT_EMAIL.to_string(),
         timestamp,
     };
 

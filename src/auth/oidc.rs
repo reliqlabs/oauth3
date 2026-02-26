@@ -58,18 +58,63 @@ fn get_tmp_cookie_name(provider: &str) -> String {
 
 fn redirect_after_login(cookies: &Cookies, config: &crate::config::AppConfig, user_id: &str, default_path: &str) -> Redirect {
     if let Some(path) = session::take_login_return_to(cookies) {
-        // For cross-domain return_to URLs, append a signed session token
-        // so the calling app can authenticate with OAuth3 via Bearer token.
-        if let Some(token) = session::create_session_token(config, user_id) {
-            let separator = if path.contains('?') { "&" } else { "?" };
-            let url = format!("{}{}token={}", path, separator, urlencoding::encode(&token));
-            Redirect::temporary(&url)
-        } else {
-            Redirect::temporary(&path)
+        if is_trusted_redirect(&path, &config.server.public_url) {
+            // For trusted return_to URLs, append a signed session token
+            // so the calling app can authenticate with OAuth3 via Bearer token.
+            if let Some(token) = session::create_session_token(config, user_id) {
+                let separator = if path.contains('?') { "&" } else { "?" };
+                let url = format!("{}{}token={}", path, separator, urlencoding::encode(&token));
+                return Redirect::temporary(&url);
+            }
+            return Redirect::temporary(&path);
         }
-    } else {
-        Redirect::temporary(default_path)
+        // Untrusted external URL — redirect without attaching token
+        tracing::warn!(return_to = %path, "Blocked token attachment to untrusted redirect URL");
+        if path.starts_with('/') && !path.starts_with("//") {
+            return Redirect::temporary(&path);
+        }
     }
+    Redirect::temporary(default_path)
+}
+
+/// Check if a redirect URL is trusted for token attachment.
+/// Allows relative paths and same-origin URLs unconditionally.
+/// For cross-origin URLs, checks ALLOWED_RETURN_TO_ORIGINS env var.
+fn is_trusted_redirect(url: &str, public_url: &str) -> bool {
+    // Relative paths (but not protocol-relative //) are always trusted
+    if url.starts_with('/') && !url.starts_with("//") {
+        return true;
+    }
+
+    let Ok(target) = url::Url::parse(url) else { return false };
+
+    // Same origin as our public URL
+    if let Ok(base) = url::Url::parse(public_url) {
+        if target.origin() == base.origin() {
+            return true;
+        }
+    }
+
+    // Check against allowed redirect origins from environment
+    if let Ok(allowed) = std::env::var("ALLOWED_RETURN_TO_ORIGINS") {
+        for origin in allowed.split(',') {
+            let origin = origin.trim();
+            if let Ok(allowed_url) = url::Url::parse(origin) {
+                if target.origin() == allowed_url.origin() {
+                    return true;
+                }
+            }
+        }
+        return false; // Origins configured but none matched
+    }
+
+    // No allowlist configured — warn and allow for backwards compatibility
+    tracing::warn!(
+        return_to = %url,
+        "No ALLOWED_RETURN_TO_ORIGINS configured; allowing external redirect. \
+         Set ALLOWED_RETURN_TO_ORIGINS to restrict."
+    );
+    true
 }
 
 fn write_tmp_state_generic(cookies: &Cookies, key: &tower_cookies::Key, provider: &str, v: &TmpAuthState) -> anyhow::Result<()> {
@@ -198,7 +243,7 @@ pub async fn callback(state: &AppState, cookies: Cookies, provider_key: &str, q:
 
     // Placeholder behavior
     if let Some(sess) = session::get_session(&cookies, &state.cookie_key) {
-        if let Some(link_provider) = account::get_link_cookie(&cookies) {
+        if let Some(link_provider) = account::get_link_cookie(&cookies, &state.cookie_key) {
             if link_provider == provider_key {
                 let identity_id = uuid::Uuid::new_v4().to_string();
                 let sub = format!("{}-placeholder-sub", provider_key);
@@ -217,7 +262,7 @@ pub async fn callback(state: &AppState, cookies: Cookies, provider_key: &str, q:
                 if let Err(e) = state.accounts.link_identity(new_identity).await {
                     tracing::error!(provider=%provider_key, error=?e, "failed to link identity (placeholder)");
                 }
-                account::clear_link_cookie(&cookies);
+                account::clear_link_cookie(&cookies, &state.cookie_key);
                 return Redirect::temporary("/account").into_response();
             }
         }
@@ -342,7 +387,11 @@ async fn callback_oidc_live(state: &AppState, cookies: Cookies, provider_key: &s
     let access_token = token_resp.access_token().secret().to_string();
     let refresh_token = token_resp.refresh_token().map(|t: &openidconnect::RefreshToken| t.secret().to_string());
     let expires_at = token_resp.expires_in().map(|d: std::time::Duration| {
-        (time::OffsetDateTime::now_utc() + d).to_string()
+        {
+                let dt = time::OffsetDateTime::now_utc() + d;
+                dt.format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_else(|_| dt.to_string())
+            }
     });
     let scopes = token_resp.scopes().map(|s| {
         s.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
@@ -357,7 +406,7 @@ async fn callback_oidc_live(state: &AppState, cookies: Cookies, provider_key: &s
     let name: Option<String> = claims.name().and_then(|n| n.get(None)).map(|v| v.to_string());
 
     if let Some(current) = session::get_session(&cookies, &state.cookie_key) {
-        if let Some(link_provider) = account::get_link_cookie(&cookies) {
+        if let Some(link_provider) = account::get_link_cookie(&cookies, &state.cookie_key) {
             if link_provider == provider_key {
                 let identity_id = uuid::Uuid::new_v4().to_string();
                 let new_identity = NewIdentity { 
@@ -373,7 +422,7 @@ async fn callback_oidc_live(state: &AppState, cookies: Cookies, provider_key: &s
                     claims: None 
                 };
                 state.accounts.link_identity(new_identity).await?;
-                account::clear_link_cookie(&cookies);
+                account::clear_link_cookie(&cookies, &state.cookie_key);
                 return Ok(Redirect::temporary("/account").into_response());
             }
         }
@@ -494,7 +543,11 @@ async fn callback_oauth2_live(state: &AppState, cookies: Cookies, provider_key: 
     let access_token = token_resp.access_token().secret().to_string();
     let refresh_token = token_resp.refresh_token().map(|t: &oauth2::RefreshToken| t.secret().to_string());
     let expires_at = token_resp.expires_in().map(|d: std::time::Duration| {
-        (time::OffsetDateTime::now_utc() + d).to_string()
+        {
+                let dt = time::OffsetDateTime::now_utc() + d;
+                dt.format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_else(|_| dt.to_string())
+            }
     });
     let scopes = token_resp.scopes().map(|s| {
         s.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
@@ -528,7 +581,7 @@ async fn fetch_github_user_and_login(
     let name = user_info["name"].as_str().or(user_info["login"].as_str()).map(|s| s.to_string());
 
     if let Some(current) = session::get_session(&cookies, &state.cookie_key) {
-        if let Some(link_provider) = account::get_link_cookie(&cookies) {
+        if let Some(link_provider) = account::get_link_cookie(&cookies, &state.cookie_key) {
             if link_provider == "github" {
                 let identity_id = uuid::Uuid::new_v4().to_string();
                 let new_identity = NewIdentity { 
@@ -544,7 +597,7 @@ async fn fetch_github_user_and_login(
                     claims: None 
                 };
                 state.accounts.link_identity(new_identity).await?;
-                account::clear_link_cookie(&cookies);
+                account::clear_link_cookie(&cookies, &state.cookie_key);
                 return Ok(Redirect::temporary("/account").into_response());
             }
         }
@@ -605,7 +658,11 @@ pub async fn refresh_token(state: &AppState, provider_key: &str, subject: &str) 
 
             let access_token = token_resp.access_token().secret().to_string();
             let new_refresh_token = token_resp.refresh_token().map(|t: &openidconnect::RefreshToken| t.secret().to_string());
-            let expires_at = token_resp.expires_in().map(|d: std::time::Duration| (time::OffsetDateTime::now_utc() + d).to_string());
+            let expires_at = token_resp.expires_in().map(|d: std::time::Duration| {
+                let dt = time::OffsetDateTime::now_utc() + d;
+                dt.format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_else(|_| dt.to_string())
+            });
             let new_scopes = token_resp.scopes().map(|s| {
                 s.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
             });
@@ -633,7 +690,11 @@ pub async fn refresh_token(state: &AppState, provider_key: &str, subject: &str) 
 
             let access_token = token_resp.access_token().secret().to_string();
             let new_refresh_token = token_resp.refresh_token().map(|t: &oauth2::RefreshToken| t.secret().to_string());
-            let expires_at = token_resp.expires_in().map(|d: std::time::Duration| (time::OffsetDateTime::now_utc() + d).to_string());
+            let expires_at = token_resp.expires_in().map(|d: std::time::Duration| {
+                let dt = time::OffsetDateTime::now_utc() + d;
+                dt.format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_else(|_| dt.to_string())
+            });
             let new_scopes = token_resp.scopes().map(|s| {
                 s.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
             });

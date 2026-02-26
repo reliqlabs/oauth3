@@ -24,11 +24,20 @@ pub async fn logout(State(state): State<AppState>, cookies: Cookies) -> impl Int
 
 const LINK_COOKIE: &str = "link_provider";
 
-// List linked identities for the current user
+// List linked identities for the current user (tokens stripped from response)
 pub async fn list_identities(State(state): State<AppState>, cookies: Cookies) -> impl IntoResponse {
     if let Some(s) = session::get_session(&cookies, &state.cookie_key) {
         match state.accounts.list_identities(&s.user_id).await {
-            Ok(list) => (StatusCode::OK, Json(json!({ "items": list }))).into_response(),
+            Ok(list) => {
+                let safe_list: Vec<_> = list.into_iter().map(|i| json!({
+                    "id": i.id,
+                    "provider_key": i.provider_key,
+                    "subject": i.subject,
+                    "email": i.email,
+                    "linked_at": i.linked_at,
+                })).collect();
+                (StatusCode::OK, Json(json!({ "items": safe_list }))).into_response()
+            }
             Err(e) => {
                 tracing::error!(error=?e, "failed to list identities");
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -39,10 +48,18 @@ pub async fn list_identities(State(state): State<AppState>, cookies: Cookies) ->
     }
 }
 
-// List all enabled providers for the login page
+// List all enabled providers for the login page (secrets stripped from response)
 pub async fn list_providers(State(state): State<AppState>) -> impl IntoResponse {
     match state.accounts.list_providers().await {
-        Ok(list) => (StatusCode::OK, Json(json!({ "items": list }))).into_response(),
+        Ok(list) => {
+            let safe_list: Vec<_> = list.into_iter().map(|p| json!({
+                "id": p.id,
+                "name": p.name,
+                "provider_type": p.provider_type,
+                "is_enabled": p.is_enabled,
+            })).collect();
+            (StatusCode::OK, Json(json!({ "items": safe_list }))).into_response()
+        }
         Err(e) => {
             tracing::error!(error=?e, "failed to list providers");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -50,7 +67,7 @@ pub async fn list_providers(State(state): State<AppState>) -> impl IntoResponse 
     }
 }
 
-// Begin linking a new provider: set a short-lived cookie flag and redirect to provider flow
+// Begin linking a new provider: set a short-lived encrypted cookie flag and redirect to provider flow
 pub async fn start_link_provider(State(state): State<AppState>, cookies: Cookies, Path(provider): Path<String>) -> impl IntoResponse {
     if session::get_session(&cookies, &state.cookie_key).is_none() {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -60,7 +77,7 @@ pub async fn start_link_provider(State(state): State<AppState>, cookies: Cookies
     c.set_http_only(true);
     c.set_same_site(tower_cookies::cookie::SameSite::Lax);
     c.set_secure(crate::auth::session::is_https());
-    cookies.add(c);
+    cookies.private(&state.cookie_key).add(c);
     Redirect::temporary(&format!("/auth/{}", provider)).into_response()
 }
 
@@ -88,15 +105,15 @@ pub async fn unlink_provider(State(state): State<AppState>, cookies: Cookies, Pa
     }
 }
 
-// Expose a helper used in oidc callback
-pub fn get_link_cookie(cookies: &Cookies) -> Option<String> {
-    cookies.get(LINK_COOKIE).map(|c| c.value().to_string())
+// Expose a helper used in oidc callback (encrypted cookie for tamper protection)
+pub fn get_link_cookie(cookies: &Cookies, key: &tower_cookies::Key) -> Option<String> {
+    cookies.private(key).get(LINK_COOKIE).map(|c| c.value().to_string())
 }
 
-pub fn clear_link_cookie(cookies: &Cookies) {
+pub fn clear_link_cookie(cookies: &Cookies, key: &tower_cookies::Key) {
     let mut c = tower_cookies::Cookie::new(LINK_COOKIE, "");
     c.set_path("/");
-    cookies.remove(c);
+    cookies.private(key).remove(c);
 }
 
 // API Key Management
