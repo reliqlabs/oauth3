@@ -1,9 +1,11 @@
+use std::time::Duration;
+
 use axum::{http::StatusCode, response::IntoResponse, Json};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::attestation::DstackClient;
-use dstack_verifier::{AttestationVerifier, AttestationResponse as DstackAttestation, InfoResponse as DstackInfo};
+use dstack_verifier::{CvmVerifier, VerificationRequest};
 
 /// Standard Phala Cloud attestation response
 /// Follows pattern from https://docs.phala.com/phala-cloud/phala-cloud-user-guides/building-with-tee/generate-ra-report
@@ -91,46 +93,40 @@ fn get_app_info() -> InfoResponse {
     }
 }
 
-/// Request body for /verify endpoint
-#[derive(Debug, Serialize, Deserialize)]
-pub struct VerifyRequest {
-    /// Attestation data (quote, event log, vm config)
-    pub attestation: DstackAttestation,
-    /// Application info to verify against quote
-    pub info: DstackInfo,
-}
-
 /// POST /verify
 ///
-/// Verifies a TDX attestation quote and returns detailed verification results.
+/// Verifies a TDX attestation quote using the official dstack-verifier v0.5.6.
 ///
-/// NOTE: Currently uses embedded dstack-verifier implementation instead of the official
-/// dstack-verifier library from https://github.com/Dstack-TEE/dstack because:
+/// Accepts either:
+/// - `{ "attestation": "hex-encoded-attestation" }` (from dstack Attest API)
+/// - `{ "quote": "hex-encoded-quote", "event_log": "...", "vm_config": "..." }` (from GetQuote)
 ///
-/// 1. v0.5.5 is binary-only (HTTP server, not a library)
-/// 2. v0.5.5 has compilation errors in ra-tls dependency (KeyRejected doesn't implement Error trait)
-/// 3. Latest main branch (as of 2026-01-25) has compilation errors in tdx-attest dependency
-///
-/// TODO: Revisit integration with official dstack-verifier once upstream build issues are resolved.
-///       Check: https://github.com/Dstack-TEE/dstack/releases
-///
-/// Current implementation provides:
-/// - TDX quote cryptographic verification via dcap-qvl (same as official verifier)
-/// - TCB status validation
-/// - Report data binding to application info
-/// - RTMR event log replay verification
-///
-/// Missing from official verifier:
-/// - OS image hash verification (requires dstack-mr/ra-tls which don't compile)
+/// Performs:
+/// - TDX quote cryptographic verification via dcap-qvl
+/// - Event log RTMR replay verification
+/// - OS image hash verification via dstack-mr
 pub async fn verify(
-    Json(request): Json<VerifyRequest>,
+    Json(request): Json<VerificationRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    // Create verifier with default configuration
-    let verifier = AttestationVerifier::new();
+    let image_cache_dir = std::env::var("DSTACK_IMAGE_CACHE_DIR")
+        .unwrap_or_else(|_| "/tmp/dstack-verifier/cache".to_string());
+    let download_url = std::env::var("DSTACK_IMAGE_DOWNLOAD_URL")
+        .unwrap_or_else(|_| "https://download.dstack.org/os-images/mr_{OS_IMAGE_HASH}.tar.gz".to_string());
+    let download_timeout = std::env::var("DSTACK_IMAGE_DOWNLOAD_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(300);
+    let pccs_url = std::env::var("DSTACK_PCCS_URL").ok();
 
-    // Perform verification
+    let verifier = CvmVerifier::new(
+        image_cache_dir,
+        download_url,
+        Duration::from_secs(download_timeout),
+        pccs_url,
+    );
+
     let result = verifier
-        .verify_attestation(&request.attestation, &request.info)
+        .verify(request)
         .await
         .map_err(|e| {
             tracing::error!(error = ?e, "Verification failed");

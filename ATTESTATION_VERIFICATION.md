@@ -31,104 +31,104 @@ Generates a TDX attestation quote with the `/info` response hash embedded in rep
 ```
 
 ### POST /verify
-Verifies a TDX attestation quote and returns detailed verification results.
+Verifies a TDX attestation quote using the official dstack-verifier v0.5.6.
 
-**Request:**
+Accepts either format:
+
+**Versioned attestation (from dstack Attest API):**
 ```json
 {
-  "attestation": {
-    "quote": "base64-encoded-tdx-quote",
-    "eventLog": "json-event-log"
-  },
-  "info": {
-    "version": "0.1.0",
-    "name": "oauth3"
-  }
+  "attestation": "hex-encoded-attestation"
+}
+```
+
+**Quote + event log (from dstack GetQuote API):**
+```json
+{
+  "quote": "hex-encoded-quote",
+  "event_log": "hex-encoded-event-log",
+  "vm_config": "json-vm-config-string"
 }
 ```
 
 **Response:**
 ```json
 {
-  "quote_valid": true,
-  "report_data_valid": true,
-  "tcb_status": "UpToDate",
-  "advisory_ids": [],
-  "rtmr_valid": true,
-  "info": { "version": "0.1.0", "name": "oauth3" }
+  "is_valid": true,
+  "details": {
+    "quote_verified": true,
+    "event_log_verified": true,
+    "os_image_hash_verified": true,
+    "report_data": "hex-encoded-64-byte-report-data",
+    "tcb_status": "UpToDate",
+    "advisory_ids": [],
+    "app_info": {
+      "app_id": "hex-string",
+      "compose_hash": "hex-string",
+      "instance_id": "hex-string",
+      "device_id": "hex-string",
+      "mrtd": "hex-string",
+      "rtmr0": "hex-string",
+      "rtmr1": "hex-string",
+      "rtmr2": "hex-string",
+      "rtmr3": "hex-string",
+      "mr_system": "hex-string",
+      "mr_aggregated": "hex-string",
+      "os_image_hash": "hex-string",
+      "key_provider_info": "hex-string"
+    }
+  },
+  "reason": null
 }
 ```
 
 ## Verification Implementation
 
-### Current: Embedded Verifier
+Uses the official [dstack-verifier v0.5.6](https://github.com/Dstack-TEE/dstack/tree/v0.5.6/verifier) library, which provides:
 
-We use a lightweight embedded implementation located in `dstack-verifier/` that provides:
-
-- ✅ TDX quote cryptographic verification (via dcap-qvl v0.3)
-- ✅ TCB status validation
-- ✅ Report data binding verification
-- ✅ RTMR event log replay verification
-- ❌ OS image hash verification (not available)
-
-### Why Not Official dstack-verifier?
-
-As of 2026-01-25, the official dstack-verifier cannot be used directly:
-
-1. **v0.5.5 (latest release)**
-   - Binary-only HTTP server (no library exports)
-   - Compilation errors in `ra-tls` dependency
-
-2. **main branch**
-   - Compilation errors in `tdx-attest` dependency
-
-See `dstack-verifier/TODO.md` for integration checklist and tracking.
+- TDX quote cryptographic verification (via dcap-qvl)
+- TCB status validation
+- RTMR event log replay verification
+- OS image hash verification (via dstack-mr)
 
 ## Verification Flow
 
 ```
 Client Request
      ↓
-1. Parse quote (base64 → bytes)
+1. Parse quote/attestation
      ↓
 2. Verify with dcap-qvl
    - Cryptographic verification
    - Certificate chain validation
    - TCB status check
      ↓
-3. Extract reportData from quote
+3. Replay RTMR event log
+   - RTMR3: digest + payload integrity
+   - RTMR 0-2: digest verification only
      ↓
-4. Compute expected reportData
-   - SHA-256 hash of info JSON
-   - Zero-pad to 64 bytes
+4. Verify OS image hash
+   - Download OS image (cached)
+   - Compute expected MRs via dstack-mr
+   - Compare against verified quote MRs
      ↓
-5. Compare reportData
+5. Decode app_info from event log
      ↓
-6. Replay RTMR event log
-   - SHA-384 hash chain
-   - Compare with quote RTMRs
-     ↓
-7. Return verification report
+6. Return verification response
 ```
-
-## Dependencies
-
-- **dcap-qvl v0.3**: Intel TDX quote verification
-- **hex**: Quote decoding (dstack returns hex format)
-- **base64**: Quote encoding for standard format
-- **sha2**: reportData hashing and RTMR replay
 
 ## Configuration
 
-### PCCS URL
-Default: `https://pccs.phala.network`
+### Environment Variables
 
-The Phala PCCS (Provisioning Certificate Caching Service) provides Intel collateral for quote verification.
-
-### Quote Format
-- **Input from dstack**: Hex-encoded
-- **Storage/API**: Base64-encoded (standard TDX format)
-- **Verification**: Converted to bytes for dcap-qvl
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DSTACK_IMAGE_CACHE_DIR` | `/tmp/dstack-verifier/cache` | Directory for cached OS images |
+| `DSTACK_IMAGE_DOWNLOAD_URL` | `https://download.dstack.org/os-images/mr_{OS_IMAGE_HASH}.tar.gz` | URL template for OS images |
+| `DSTACK_IMAGE_DOWNLOAD_TIMEOUT_SECS` | `300` | Download timeout in seconds |
+| `DSTACK_PCCS_URL` | (Intel default) | PCCS URL for quote verification |
+| `DSTACK_SOCKET` | - | Unix socket path for dstack (production) |
+| `DSTACK_ENDPOINT` | `http://simulator:8090` | HTTP endpoint for dstack (dev) |
 
 ## Testing
 
@@ -137,29 +137,10 @@ Run verification tests:
 cargo test verify_endpoint
 ```
 
-Test with real production quote:
-```bash
-cargo test verify_endpoint_accepts_attestation_request
-```
-
-## Future Work
-
-1. **Integrate official dstack-verifier** once build issues are resolved
-   - Track at: https://github.com/Dstack-TEE/dstack/releases
-   - See: `dstack-verifier/TODO.md`
-
-2. **Add OS image verification** when dstack-mr becomes available
-   - Requires working ra-tls and dstack-mr dependencies
-   - Provides stronger security guarantees
-
-3. **Configurable verification policies**
-   - Optional RTMR[0] (OS hash) verification
-   - Optional compose hash verification
-   - Optional domain verification
-
 ## References
 
 - [Phala Cloud TEE Documentation](https://docs.phala.com/phala-cloud/phala-cloud-user-guides/building-with-tee)
 - [Intel TDX Specification](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/documentation.html)
 - [dstack Project](https://github.com/Dstack-TEE/dstack)
+- [dstack-verifier README](https://github.com/Dstack-TEE/dstack/tree/v0.5.6/verifier)
 - [dcap-qvl Library](https://github.com/automata-network/dcap-qvl)

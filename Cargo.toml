@@ -59,8 +59,8 @@ urlencoding = "2"
 bytes = "1"
 http-body-util = "0.1"
 url = "2"
-# dstack-verifier with official v0.5.5 code
-dstack-verifier = { path = "dstack-verifier" }
+# dstack-verifier: official v0.5.6 (OS image hash verification via dstack-mr)
+dstack-verifier = { git = "https://github.com/Dstack-TEE/dstack", tag = "v0.5.6" }
 
 [dev-dependencies]
 # Test-only; avoid compiling in production images
