@@ -36,6 +36,8 @@
           # SP1 Groth16 native proving (gnark FFI via cgo)
           go
           llvmPackages.libclang
+          # sp1-prover-types builds protobuf definitions
+          protobuf
         ];
 
         # Runtime dependencies
@@ -69,6 +71,10 @@
 
           # bindgen needs LIBCLANG_PATH for SP1 native-gnark FFI
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+
+          # Go needs writable cache dirs (sp1-recursion-gnark-ffi builds Go code)
+          GOCACHE = "/tmp/go-cache";
+          GOPATH = "/tmp/go-path";
 
           # Ensure reproducible builds
           CARGO_INCREMENTAL = "0";
