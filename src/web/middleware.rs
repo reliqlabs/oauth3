@@ -11,6 +11,96 @@ use serde_json::{json, Value};
 
 use crate::attestation::DstackClient;
 
+pub async fn prove_middleware(request: Request, next: Next) -> Result<Response, StatusCode> {
+    let should_prove = request
+        .uri()
+        .query()
+        .and_then(|q| {
+            url::form_urlencoded::parse(q.as_bytes())
+                .find(|(key, _)| key == "prove")
+                .map(|(_, value)| value == "true" || value == "1")
+        })
+        .unwrap_or(false);
+
+    if !should_prove {
+        return Ok(next.run(request).await);
+    }
+
+    let response = next.run(request).await;
+
+    if response.status() != StatusCode::OK {
+        return Ok(response);
+    }
+
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if !content_type.contains("application/json") {
+        return Ok(response);
+    }
+
+    let (parts, body) = response.into_parts();
+    let bytes = body
+        .collect()
+        .await
+        .map_err(|e| {
+            tracing::error!(error = ?e, "failed to collect response body");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .to_bytes();
+
+    // Get TDX quote for the response body
+    let client = DstackClient::new();
+    let quote = client
+        .get_quote(&bytes)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = ?e, "failed to get attestation quote for proving");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let quote_bytes = hex::decode(&quote.quote).map_err(|e| {
+        tracing::error!(error = ?e, "failed to decode hex quote");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Generate ZK proof (this is expensive — minutes for Groth16)
+    tracing::info!(quote_len = quote_bytes.len(), "generating zkDCAP proof...");
+    let proof_output = zkdcap_host::prove_quote(&quote_bytes).await.map_err(|e| {
+        tracing::error!(error = ?e, "zkDCAP proof generation failed");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let original_json: Value = serde_json::from_slice(&bytes).map_err(|e| {
+        tracing::error!(error = ?e, "failed to parse response as JSON");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let proved_response = json!({
+        "data": original_json,
+        "proof": {
+            "pi_a": proof_output.proof["pi_a"],
+            "pi_b": proof_output.proof["pi_b"],
+            "pi_c": proof_output.proof["pi_c"],
+            "protocol": proof_output.proof["protocol"],
+            "curve": proof_output.proof["curve"],
+            "public_inputs": proof_output.public_inputs,
+            "journal": proof_output.journal,
+            "zkvm": proof_output.zkvm,
+        }
+    });
+
+    let new_body = serde_json::to_vec(&proved_response).map_err(|e| {
+        tracing::error!(error = ?e, "failed to serialize proved response");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Response::from_parts(parts, Body::from(new_body)))
+}
+
 pub async fn attestation_middleware(request: Request, next: Next) -> Result<Response, StatusCode> {
     // Check if attestation is requested via query parameter
     let should_attest = request

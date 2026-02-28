@@ -220,6 +220,7 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::any(crate::web::proxy::proxy_request))
         .nest_service("/static", ServeDir::new("static"))
         .with_state(state)
+        .layer(middleware::from_fn(crate::web::middleware::prove_middleware))
         .layer(middleware::from_fn(crate::web::middleware::attestation_middleware))
         .layer(CookieManagerLayer::new())
         .layer(TraceLayer::new_for_http())

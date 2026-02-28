@@ -93,15 +93,6 @@ fn extract_attr(tx: &serde_json::Value, event_type: &str, key: &str) -> Option<S
         .and_then(|a| a["value"].as_str().map(String::from))
 }
 
-fn get_wallet_address() -> String {
-    let out = xiond(&[
-        "keys", "show", KEY_NAME,
-        "--keyring-backend", "test",
-        "-a",
-    ]);
-    out.trim().to_string()
-}
-
 // ─── data fetching ─────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -125,6 +116,7 @@ async fn fetch_quote(client: &reqwest::Client) -> (Vec<u8>, String) {
 #[derive(Deserialize)]
 struct RawEventLogEntry {
     imr: u32,
+    #[allow(dead_code)]
     event_type: u64,
     event: String,
     event_payload: String, // hex
@@ -140,20 +132,21 @@ async fn fetch_event_log(client: &reqwest::Client) -> Vec<RawEventLogEntry> {
         .await
         .expect("read info html");
 
-    // Extract JSON event log from the HTML page
-    let re = Regex::new(r#"(?s)eventLog.*?(\[\s*\{.*?\}\s*\])"#).unwrap();
-    let json_str = re
-        .captures(&html)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str().to_string())
-        .expect("find event log JSON in HTML");
-
-    // Unescape HTML entities
-    let json_str = json_str
+    // Unescape HTML entities first
+    let unescaped = html
+        .replace("&#34;", "\"")
         .replace("&quot;", "\"")
         .replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">");
+
+    // Find the event_log JSON array
+    let re = Regex::new(r#"(?s)"event_log"\s*:\s*(\[.*?\])\s*[,}]"#).unwrap();
+    let json_str = re
+        .captures(&unescaped)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string())
+        .expect("find event_log JSON in HTML");
 
     let all_events: Vec<RawEventLogEntry> =
         serde_json::from_str(&json_str).expect("parse event log json");
@@ -224,19 +217,19 @@ struct GetVerificationInner {
 
 #[tokio::test]
 async fn test_verify_attestation_on_chain() {
-    // Load .env
-    dotenvy::from_filename(format!(
-        "{}/.env",
-        env!("CARGO_MANIFEST_DIR")
-    ))
-    .ok();
+    // Load .env (check local first, then root)
+    dotenvy::from_filename(format!("{}/.env", env!("CARGO_MANIFEST_DIR"))).ok();
+    dotenvy::from_filename(format!("{}/../../.env", env!("CARGO_MANIFEST_DIR"))).ok();
 
     let mnemonic = std::env::var("XION_TESTNET_MNEMONIC")
         .expect("Set XION_TESTNET_MNEMONIC in .env or environment");
 
     // ── 1. Import mnemonic into xiond keyring ──
     eprintln!("=== Importing wallet ===");
-    let import = Command::new("xiond")
+
+    // Try to import the key. Pipe mnemonic to stdin.
+    use std::io::Write as _;
+    let mut child = Command::new("xiond")
         .args([
             "keys", "add", KEY_NAME,
             "--keyring-backend", "test",
@@ -247,21 +240,73 @@ async fn test_verify_attestation_on_chain() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("spawn xiond keys add");
-
-    // Write mnemonic to stdin
-    use std::io::Write;
-    let mut child = import;
     child
         .stdin
         .take()
         .unwrap()
-        .write_all(format!("{}\n", mnemonic).as_bytes())
+        .write_all(mnemonic.trim().as_bytes())
         .expect("write mnemonic");
-    let output = child.wait_with_output().expect("wait for keys add");
-    let _stderr = String::from_utf8_lossy(&output.stderr);
-    // Key might already exist, that's fine
+    let import_out = child.wait_with_output().expect("wait keys add");
+    let import_stderr = String::from_utf8_lossy(&import_out.stderr).to_string();
 
-    let address = get_wallet_address();
+    // Determine key name to use
+    let key_name = if import_out.status.success() {
+        KEY_NAME.to_string()
+    } else if import_stderr.contains("duplicated address") || import_stderr.contains("already exists") {
+        // Mnemonic already imported under a different name — find it
+        let list_out = Command::new("xiond")
+            .args(["keys", "list", "--keyring-backend", "test", "--output", "json"])
+            .output()
+            .expect("xiond keys list");
+        let keys: Vec<serde_json::Value> =
+            serde_json::from_slice(&list_out.stdout).unwrap_or_default();
+
+        // Derive the address via dry-run
+        let mut dry = Command::new("xiond")
+            .args([
+                "keys", "add", "tmp-dry",
+                "--keyring-backend", "test",
+                "--recover",
+                "--dry-run",
+                "--output", "json",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn dry-run");
+        dry.stdin.take().unwrap().write_all(mnemonic.trim().as_bytes()).unwrap();
+        let dry_out = dry.wait_with_output().expect("dry-run");
+        let dry_stdout = String::from_utf8_lossy(&dry_out.stdout);
+        let dry_json: serde_json::Value = serde_json::from_str(dry_stdout.trim())
+            .unwrap_or_else(|e| {
+                // Might be in stderr
+                let dry_stderr = String::from_utf8_lossy(&dry_out.stderr);
+                panic!("parse dry-run: {}\nstdout: {}\nstderr: {}", e, dry_stdout, dry_stderr);
+            });
+        let target_addr = dry_json["address"].as_str().unwrap();
+
+        keys.iter()
+            .find_map(|k| {
+                if k["address"].as_str() == Some(target_addr) {
+                    k["name"].as_str().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| panic!("Could not find existing key for address {}", target_addr))
+    } else {
+        panic!("Failed to import key: {}", import_stderr);
+    };
+
+    eprintln!("Using key: {}", key_name);
+    let address = {
+        let out = Command::new("xiond")
+            .args(["keys", "show", &key_name, "--keyring-backend", "test", "-a"])
+            .output()
+            .expect("keys show");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
     eprintln!("Wallet address: {}", address);
 
     // Check balance
@@ -314,13 +359,14 @@ async fn test_verify_attestation_on_chain() {
 
     let store_out = xiond(&[
         "tx", "wasm", "store", WASM_PATH,
-        "--from", KEY_NAME,
+        "--from", &key_name,
         "--keyring-backend", "test",
         "--node", RPC_URL,
         "--chain-id", CHAIN_ID,
         "--gas", "20000000",
         "--fees", "500000uxion",
         "-y",
+        "--output", "json",
     ]);
     let store_tx: serde_json::Value =
         serde_json::from_str(&store_out).expect("parse store tx output");
@@ -359,7 +405,7 @@ async fn test_verify_attestation_on_chain() {
     let inst_out = xiond(&[
         "tx", "wasm", "instantiate", &code_id, &init_json,
         "--label", &label,
-        "--from", KEY_NAME,
+        "--from", &key_name,
         "--admin", &address,
         "--keyring-backend", "test",
         "--node", RPC_URL,
@@ -367,6 +413,7 @@ async fn test_verify_attestation_on_chain() {
         "--gas", "500000",
         "--fees", "50000uxion",
         "-y",
+        "--output", "json",
     ]);
     let inst_tx: serde_json::Value =
         serde_json::from_str(&inst_out).expect("parse instantiate tx output");
@@ -404,13 +451,14 @@ async fn test_verify_attestation_on_chain() {
 
     let exec_out = xiond(&[
         "tx", "wasm", "execute", &contract_addr, &verify_json,
-        "--from", KEY_NAME,
+        "--from", &key_name,
         "--keyring-backend", "test",
         "--node", RPC_URL,
         "--chain-id", CHAIN_ID,
         "--gas", "50000000",
         "--fees", "500000uxion",
         "-y",
+        "--output", "json",
     ]);
     let exec_tx: serde_json::Value =
         serde_json::from_str(&exec_out).expect("parse execute tx output");

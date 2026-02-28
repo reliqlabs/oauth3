@@ -30,6 +30,8 @@ services:
       COOKIE_KEY_BASE64: ${COOKIE_KEY_BASE64}
       RUST_LOG: ${RUST_LOG:-info,oauth3=info}
       DSTACK_SOCKET: /var/run/dstack.sock
+      # SP1 proving mode: cpu (default) or cuda (GPU)
+      SP1_PROVER: ${SP1_PROVER:-cpu}
       # Google OAuth provider
       PROVIDER_GOOGLE_TYPE: ${PROVIDER_GOOGLE_TYPE}
       PROVIDER_GOOGLE_MODE: ${PROVIDER_GOOGLE_MODE}

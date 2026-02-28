@@ -33,6 +33,9 @@
         nativeBuildInputs = with pkgs; [
           pkg-config
           rustToolchain
+          # SP1 Groth16 native proving (gnark FFI via cgo)
+          go
+          llvmPackages.libclang
         ];
 
         # Runtime dependencies
@@ -41,14 +44,15 @@
           openssl
         ];
 
-        # Filter source to include views directory
+        # Filter source to include views, migrations, and SP1 guest ELF
         src = pkgs.lib.cleanSourceWith {
           src = ./.;
           filter = path: type:
             (craneLib.filterCargoSources path type) ||
             (builtins.match ".*views/.*\\.html$" path != null) ||
             (builtins.match ".*/migrations/.*" path != null) ||
-            (builtins.match ".*/diesel\\.toml$" path != null);
+            (builtins.match ".*/diesel\\.toml$" path != null) ||
+            (builtins.match ".*/zkdcap/elf/.*" path != null);
         };
 
         # Common args for crane
@@ -62,6 +66,9 @@
 
           # Don't run tests during build
           doCheck = false;
+
+          # bindgen needs LIBCLANG_PATH for SP1 native-gnark FFI
+          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
           # Ensure reproducible builds
           CARGO_INCREMENTAL = "0";
@@ -135,7 +142,13 @@
             rust-analyzer
             diesel-cli
             postgresql
+            # SP1 Groth16 native proving (gnark FFI)
+            go
+            llvmPackages.libclang
           ];
+
+          # bindgen needs LIBCLANG_PATH to find libclang
+          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
         };
       }
     );
