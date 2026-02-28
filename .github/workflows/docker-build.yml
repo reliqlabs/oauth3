@@ -33,20 +33,11 @@ jobs:
             experimental-features = nix-command flakes
             max-jobs = auto
             cores = 0
+            sandbox = false
 
-      - name: Cache Nix store
-        uses: actions/cache@v4
-        with:
-          path: /tmp/nix-cache
-          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'Cargo.lock') }}
-          restore-keys: |
-            nix-${{ runner.os }}-
-
-      - name: Restore Nix store from cache
-        run: |
-          if [ -f /tmp/nix-cache/store.nar ]; then
-            nix-store --import < /tmp/nix-cache/store.nar || true
-          fi
+      # TODO: Add Cachix or similar Nix binary cache for faster CI builds.
+      # The Nix store (/nix/store) is too large for actions/cache.
+      # Options: Cachix (free for open source), FlakeHub, or self-hosted binary cache.
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -80,15 +71,6 @@ jobs:
         run: |
           nix build .#dockerImage -L
           docker load < result
-
-      - name: Save Nix store to cache
-        if: always()
-        run: |
-          mkdir -p /tmp/nix-cache
-          # Export the build result and its closure
-          if [ -L result ]; then
-            nix-store --export $(nix-store -qR result) > /tmp/nix-cache/store.nar 2>/dev/null || true
-          fi
 
       - name: Tag and push image
         if: github.event_name != 'pull_request'
