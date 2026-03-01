@@ -72,6 +72,9 @@
           # bindgen needs LIBCLANG_PATH for SP1 native-gnark FFI
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
+          # bindgen needs clang resource dir for stddef.h etc
+          BINDGEN_EXTRA_CLANG_ARGS = "-isystem ${pkgs.llvmPackages.libclang.lib}/lib/clang/${pkgs.lib.versions.major pkgs.llvmPackages.libclang.version}/include";
+
           # Go needs writable cache dirs (sp1-recursion-gnark-ffi builds Go code)
           GOCACHE = "/tmp/go-cache";
           GOPATH = "/tmp/go-path";
