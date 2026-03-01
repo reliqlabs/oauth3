@@ -114,6 +114,9 @@
             postgresql
             bashInteractive
             coreutils
+            # SP1 circuit artifact extraction needs tar+gzip
+            gnutar
+            gzip
           ];
 
           config = {
