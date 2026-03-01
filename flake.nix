@@ -120,6 +120,8 @@
             Cmd = [ "${oauth3}/bin/oauth3" ];
             Env = [
               "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+              # SP1 CUDA prover needs writable $HOME for ~/.sp1/bin/sp1-gpu-server
+              "HOME=/tmp"
             ];
             ExposedPorts = {
               "8080/tcp" = {};

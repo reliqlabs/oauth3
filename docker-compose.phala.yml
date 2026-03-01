@@ -20,6 +20,13 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     volumes:
       # Mount dstack socket for TEE operations
       - /var/run/dstack.sock:/var/run/dstack.sock
@@ -30,8 +37,9 @@ services:
       COOKIE_KEY_BASE64: ${COOKIE_KEY_BASE64}
       RUST_LOG: ${RUST_LOG:-info,oauth3=info}
       DSTACK_SOCKET: /var/run/dstack.sock
-      # SP1 proving mode: cpu (default) or cuda (GPU)
+      # SP1 proving mode: cpu (default), cuda (GPU), or network (Succinct prover network)
       SP1_PROVER: ${SP1_PROVER:-cpu}
+      NETWORK_PRIVATE_KEY: ${NETWORK_PRIVATE_KEY:-}
       # Google OAuth provider
       PROVIDER_GOOGLE_TYPE: ${PROVIDER_GOOGLE_TYPE}
       PROVIDER_GOOGLE_MODE: ${PROVIDER_GOOGLE_MODE}
