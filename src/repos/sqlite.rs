@@ -754,15 +754,19 @@ impl AccountsRepo for SqliteAccountsRepo {
                     .order(pj::created_at.asc())
                     .first::<ProveJob>(conn)
                     .optional()?;
-                if let Some(ref job) = job {
+                if let Some(mut job) = job {
                     diesel::update(pj::prove_jobs.find(&job.id))
                         .set((
                             pj::status.eq("running"),
                             pj::updated_at.eq(&now),
                         ))
                         .execute(conn)?;
+                    job.status = "running".to_string();
+                    job.updated_at = now;
+                    Ok(Some(job))
+                } else {
+                    Ok(None)
                 }
-                Ok(job)
             })
         })
         .await??;

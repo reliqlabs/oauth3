@@ -534,7 +534,7 @@ impl AccountsRepo for PgAccountsRepo {
                         .first::<ProveJob>(conn)
                         .await
                         .optional()?;
-                    if let Some(ref job) = job {
+                    if let Some(mut job) = job {
                         diesel::update(pj::prove_jobs.find(&job.id))
                             .set((
                                 pj::status.eq("running"),
@@ -542,8 +542,12 @@ impl AccountsRepo for PgAccountsRepo {
                             ))
                             .execute(conn)
                             .await?;
+                        job.status = "running".to_string();
+                        job.updated_at = now;
+                        Ok(Some(job))
+                    } else {
+                        Ok(None)
                     }
-                    Ok(job)
                 })
             })
             .await
