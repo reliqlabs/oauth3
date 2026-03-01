@@ -92,7 +92,10 @@ pub async fn run() -> anyhow::Result<()> {
     }
 
     tracing::info!("🛣️  Building router with {} routes", 9);
-    let app = build_router(state);
+    let app = build_router(state.clone());
+
+    // Spawn background prove worker
+    crate::web::prove_worker::spawn_prove_worker(state);
 
     let addr = config.server.bind_addr.clone();
     tracing::info!("🌐 Server listening on {}", addr);
@@ -218,9 +221,10 @@ pub fn build_router(state: AppState) -> Router {
         // OAuth proxy endpoint - forwards authenticated requests to provider APIs
         .route("/proxy/{provider}/{*path}",
             axum::routing::any(crate::web::proxy::proxy_request))
+        .route("/prove/{job_id}", get(crate::web::handlers::prove::get_prove_status))
         .nest_service("/static", ServeDir::new("static"))
-        .with_state(state)
-        .layer(middleware::from_fn(crate::web::middleware::prove_middleware))
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(state, crate::web::middleware::prove_middleware))
         .layer(middleware::from_fn(crate::web::middleware::attestation_middleware))
         .layer(CookieManagerLayer::new())
         .layer(TraceLayer::new_for_http())

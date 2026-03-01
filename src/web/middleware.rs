@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::Request,
+    extract::{Request, State},
     http::StatusCode,
     middleware::Next,
     response::Response,
@@ -9,9 +9,15 @@ use base64::Engine;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 
+use crate::app::AppState;
 use crate::attestation::DstackClient;
+use crate::models::prove_job::ProveJob;
 
-pub async fn prove_middleware(request: Request, next: Next) -> Result<Response, StatusCode> {
+pub async fn prove_middleware(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
     let should_prove = request
         .uri()
         .query()
@@ -26,6 +32,7 @@ pub async fn prove_middleware(request: Request, next: Next) -> Result<Response, 
         return Ok(next.run(request).await);
     }
 
+    let request_uri = request.uri().to_string();
     let response = next.run(request).await;
 
     if response.status() != StatusCode::OK {
@@ -42,7 +49,7 @@ pub async fn prove_middleware(request: Request, next: Next) -> Result<Response, 
         return Ok(response);
     }
 
-    let (parts, body) = response.into_parts();
+    let (_, body) = response.into_parts();
     let bytes = body
         .collect()
         .await
@@ -52,53 +59,42 @@ pub async fn prove_middleware(request: Request, next: Next) -> Result<Response, 
         })?
         .to_bytes();
 
-    // Get TDX quote for the response body
-    let client = DstackClient::new();
-    let quote = client
-        .get_quote(&bytes)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = ?e, "failed to get attestation quote for proving");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let job_id = uuid::Uuid::new_v4().to_string();
+    let now = time::OffsetDateTime::now_utc().to_string();
 
-    let quote_bytes = hex::decode(&quote.quote).map_err(|e| {
-        tracing::error!(error = ?e, "failed to decode hex quote");
+    let job = ProveJob {
+        id: job_id.clone(),
+        status: "pending".to_string(),
+        request_uri,
+        response_body: bytes.to_vec(),
+        quote_hex: None,
+        proof_json: None,
+        error_message: None,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+
+    state.accounts.create_prove_job(job).await.map_err(|e| {
+        tracing::error!(error = ?e, "failed to create prove job");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    // Generate ZK proof (this is expensive — minutes for Groth16)
-    tracing::info!(quote_len = quote_bytes.len(), "generating zkDCAP proof...");
-    let proof_output = zkdcap_host::prove_quote(&quote_bytes).await.map_err(|e| {
-        tracing::error!(error = ?e, "zkDCAP proof generation failed");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let original_json: Value = serde_json::from_slice(&bytes).map_err(|e| {
-        tracing::error!(error = ?e, "failed to parse response as JSON");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let proved_response = json!({
-        "data": original_json,
-        "proof": {
-            "pi_a": proof_output.proof["pi_a"],
-            "pi_b": proof_output.proof["pi_b"],
-            "pi_c": proof_output.proof["pi_c"],
-            "protocol": proof_output.proof["protocol"],
-            "curve": proof_output.proof["curve"],
-            "public_inputs": proof_output.public_inputs,
-            "journal": proof_output.journal,
-            "zkvm": proof_output.zkvm,
-        }
+    let resp = json!({
+        "job_id": job_id,
+        "status": "pending",
+        "poll_url": format!("/prove/{}", job_id),
     });
 
-    let new_body = serde_json::to_vec(&proved_response).map_err(|e| {
-        tracing::error!(error = ?e, "failed to serialize proved response");
+    let body = serde_json::to_vec(&resp).map_err(|e| {
+        tracing::error!(error = ?e, "failed to serialize prove job response");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    Ok(Response::from_parts(parts, Body::from(new_body)))
+    Ok(Response::builder()
+        .status(StatusCode::ACCEPTED)
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap())
 }
 
 pub async fn attestation_middleware(request: Request, next: Next) -> Result<Response, StatusCode> {

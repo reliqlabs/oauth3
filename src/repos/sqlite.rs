@@ -14,6 +14,7 @@ use crate::models::{
     consent::UserConsent,
     oauth_code::OAuthCode,
     app_token::{AppAccessToken, AppRefreshToken},
+    prove_job::ProveJob,
 };
 use crate::repos::AccountsRepo;
 use crate::schema::{
@@ -27,6 +28,7 @@ use crate::schema::{
     oauth_codes,
     app_access_tokens,
     app_refresh_tokens,
+    prove_jobs,
 };
 
 pub struct SqliteAccountsRepo {
@@ -696,5 +698,94 @@ impl AccountsRepo for SqliteAccountsRepo {
         })
         .await??;
         Ok(())
+    }
+
+    async fn create_prove_job(&self, job: ProveJob) -> anyhow::Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            diesel::insert_into(prove_jobs::table)
+                .values(&job)
+                .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn get_prove_job(&self, id: &str) -> anyhow::Result<Option<ProveJob>> {
+        let id = id.to_string();
+        let pool = self.pool.clone();
+        let row = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<ProveJob>> {
+            let mut conn = pool.get()?;
+            let row = prove_jobs::table
+                .find(&id)
+                .first::<ProveJob>(&mut conn)
+                .optional()?;
+            Ok(row)
+        })
+        .await??;
+        Ok(row)
+    }
+
+    async fn update_prove_job(&self, job: &ProveJob) -> anyhow::Result<()> {
+        let job = job.clone();
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut conn = pool.get()?;
+            diesel::update(prove_jobs::table.find(&job.id))
+                .set(&job)
+                .execute(&mut conn)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn claim_next_prove_job(&self) -> anyhow::Result<Option<ProveJob>> {
+        let pool = self.pool.clone();
+        let now = time::OffsetDateTime::now_utc().to_string();
+        let row = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<ProveJob>> {
+            let mut conn = pool.get()?;
+            conn.immediate_transaction(|conn| {
+                use prove_jobs::dsl as pj;
+                let job = pj::prove_jobs
+                    .filter(pj::status.eq("pending"))
+                    .order(pj::created_at.asc())
+                    .first::<ProveJob>(conn)
+                    .optional()?;
+                if let Some(ref job) = job {
+                    diesel::update(pj::prove_jobs.find(&job.id))
+                        .set((
+                            pj::status.eq("running"),
+                            pj::updated_at.eq(&now),
+                        ))
+                        .execute(conn)?;
+                }
+                Ok(job)
+            })
+        })
+        .await??;
+        Ok(row)
+    }
+
+    async fn reset_running_prove_jobs(&self) -> anyhow::Result<u64> {
+        let pool = self.pool.clone();
+        let now = time::OffsetDateTime::now_utc().to_string();
+        let n = tokio::task::spawn_blocking(move || -> anyhow::Result<u64> {
+            let mut conn = pool.get()?;
+            use prove_jobs::dsl as pj;
+            let n = diesel::update(
+                pj::prove_jobs.filter(pj::status.eq("running"))
+            )
+            .set((
+                pj::status.eq("pending"),
+                pj::updated_at.eq(&now),
+            ))
+            .execute(&mut conn)?;
+            Ok(n as u64)
+        })
+        .await??;
+        Ok(n)
     }
 }
