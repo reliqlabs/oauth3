@@ -76,10 +76,10 @@
           GOCACHE = "/tmp/go-cache";
           GOPATH = "/tmp/go-path";
 
-          # Ensure reproducible builds
+          # Reproducible builds with CI-friendly resource usage
           CARGO_INCREMENTAL = "0";
-          CARGO_PROFILE_RELEASE_LTO = "true";
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "1";
+          CARGO_PROFILE_RELEASE_LTO = "thin";
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "16";
         };
 
         # Build dependencies first (for caching)
