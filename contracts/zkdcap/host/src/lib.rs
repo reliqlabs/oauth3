@@ -19,17 +19,21 @@ pub struct ProofOutput {
 /// 2. Extract pre-verified inputs (cert chain validation on host)
 /// 3. Generate SP1 Groth16 proof (lite guest — steps 4-10 in zkVM)
 pub async fn prove_quote(quote: &[u8]) -> Result<ProofOutput> {
+    tracing::info!("prove_quote: fetching Intel PCS collateral...");
     let collateral = dcap_qvl::collateral::get_collateral_from_pcs(quote)
         .await
         .context("failed to fetch collateral from Intel PCS")?;
+    tracing::info!("prove_quote: PCS collateral fetched");
 
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
 
+    tracing::info!("prove_quote: extracting pre-verified inputs...");
     let pre_verified =
         dcap_qvl::verify::rustcrypto::extract_pre_verified(quote, &collateral, now_secs)
             .context("failed to extract pre-verified inputs")?;
+    tracing::info!("prove_quote: pre-verified inputs extracted, starting SP1 proof...");
 
     sp1::generate_proof(quote, &pre_verified, now_secs).await
 }

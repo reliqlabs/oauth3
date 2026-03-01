@@ -5208,6 +5208,7 @@ dependencies = [
  "diesel_migrations",
  "dotenvy",
  "dstack-verifier",
+ "futures",
  "hex",
  "http-body-util",
  "jsonwebtoken",

@@ -1,5 +1,7 @@
+use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 
+use futures::FutureExt;
 use serde_json::json;
 
 use crate::app::AppState;
@@ -18,8 +20,37 @@ pub fn spawn_prove_worker(state: AppState) {
         loop {
             match state.accounts.claim_next_prove_job().await {
                 Ok(Some(job)) => {
-                    tracing::info!(job_id = %job.id, "processing prove job");
-                    process_job(&state, job).await;
+                    let job_id = job.id.clone();
+                    tracing::info!(job_id = %job_id, "processing prove job");
+
+                    // Catch panics so the worker loop survives
+                    let result =
+                        AssertUnwindSafe(process_job(&state, job)).catch_unwind().await;
+
+                    if let Err(e) = result {
+                        let msg = if let Some(s) = e.downcast_ref::<String>() {
+                            s.clone()
+                        } else if let Some(s) = e.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else {
+                            "unknown panic".to_string()
+                        };
+                        tracing::error!(job_id = %job_id, error = %msg, "prove job panicked!");
+                        // Mark job as failed so it doesn't stay stuck
+                        let now = time::OffsetDateTime::now_utc().to_string();
+                        let fail_job = ProveJob {
+                            id: job_id,
+                            status: "failed".to_string(),
+                            error_message: Some(format!("worker panic: {msg}")),
+                            updated_at: now,
+                            request_uri: String::new(),
+                            response_body: Vec::new(),
+                            quote_hex: None,
+                            proof_json: None,
+                            created_at: String::new(),
+                        };
+                        let _ = state.accounts.update_prove_job(&fail_job).await;
+                    }
                 }
                 Ok(None) => {
                     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -37,6 +68,7 @@ async fn process_job(state: &AppState, mut job: ProveJob) {
     let now = || time::OffsetDateTime::now_utc().to_string();
 
     // Step 1: Get TDX quote for the response body
+    tracing::info!(job_id = %job.id, "fetching TDX attestation quote...");
     let client = DstackClient::new();
     let quote = match client.get_quote(&job.response_body).await {
         Ok(q) => q,
@@ -62,12 +94,13 @@ async fn process_job(state: &AppState, mut job: ProveJob) {
         }
     };
 
+    tracing::info!(job_id = %job.id, quote_len = quote_bytes.len(), "TDX quote obtained");
     job.quote_hex = Some(quote.quote.clone());
     job.updated_at = now();
     let _ = state.accounts.update_prove_job(&job).await;
 
-    // Step 2: Generate ZK proof
-    tracing::info!(job_id = %job.id, quote_len = quote_bytes.len(), "generating zkDCAP proof...");
+    // Step 2: Generate ZK proof (PCS collateral + pre-verify + SP1 Groth16)
+    tracing::info!(job_id = %job.id, "starting prove_quote pipeline...");
     match zkdcap_host::prove_quote(&quote_bytes).await {
         Ok(proof_output) => {
             let proof_value = json!({
@@ -86,7 +119,7 @@ async fn process_job(state: &AppState, mut job: ProveJob) {
             tracing::info!(job_id = %job.id, "prove job completed");
         }
         Err(e) => {
-            tracing::error!(job_id = %job.id, error = ?e, "zkDCAP proof generation failed");
+            tracing::error!(job_id = %job.id, error = ?e, "prove_quote failed");
             job.status = "failed".to_string();
             job.error_message = Some(format!("proof generation failed: {e}"));
             job.updated_at = now();

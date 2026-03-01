@@ -40,6 +40,9 @@ services:
       # SP1 proving mode: cpu (default), cuda (GPU), or network (Succinct prover network)
       SP1_PROVER: ${SP1_PROVER:-cpu}
       NETWORK_PRIVATE_KEY: ${NETWORK_PRIVATE_KEY:-}
+      # NVIDIA GPU passthrough
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
       # Google OAuth provider
       PROVIDER_GOOGLE_TYPE: ${PROVIDER_GOOGLE_TYPE}
       PROVIDER_GOOGLE_MODE: ${PROVIDER_GOOGLE_MODE}
