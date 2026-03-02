@@ -155,6 +155,23 @@
           mkdir -p "$HOME/.sp1/bin"
           ln -sf "${sp1GpuServerWrapper}/bin/sp1-gpu-server" "$HOME/.sp1/bin/sp1-gpu-server"
           echo "GPU: $(ls /dev/nvidia* 2>/dev/null | wc -l) devices, CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+
+          # Pre-start sp1-gpu-server and capture any crash output
+          echo "Starting sp1-gpu-server in background..."
+          "${sp1GpuServerWrapper}/bin/sp1-gpu-server" > /tmp/sp1-gpu-server.log 2>&1 &
+          SP1_PID=$!
+          sleep 3
+          if kill -0 $SP1_PID 2>/dev/null; then
+            echo "sp1-gpu-server running (PID $SP1_PID)"
+            # Check for socket
+            ls -la /tmp/*.sock /tmp/sp1* 2>&1 || echo "No sockets in /tmp"
+            ls -la "$HOME/.sp1/" 2>&1 || echo "No .sp1 dir"
+          else
+            echo "sp1-gpu-server CRASHED. Log output:"
+            cat /tmp/sp1-gpu-server.log
+            echo "--- end crash log ---"
+          fi
+
           exec "${oauth3}/bin/oauth3"
         '';
 
