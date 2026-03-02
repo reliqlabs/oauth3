@@ -154,20 +154,7 @@
         oauth3Entrypoint = pkgs.writeShellScript "oauth3-entrypoint" ''
           mkdir -p "$HOME/.sp1/bin"
           ln -sf "${sp1GpuServerWrapper}/bin/sp1-gpu-server" "$HOME/.sp1/bin/sp1-gpu-server"
-          echo "GPU: $(ls /dev/nvidia* 2>/dev/null | wc -l) devices, CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
-
-          # Pre-start sp1-gpu-server and verify it starts
-          "${sp1GpuServerWrapper}/bin/sp1-gpu-server" > /tmp/sp1-gpu-server.log 2>&1 &
-          SP1_PID=$!
-          sleep 5
-          if kill -0 $SP1_PID 2>/dev/null; then
-            echo "sp1-gpu-server running (PID $SP1_PID)"
-            ls -la /tmp/*.sock 2>&1 || echo "No sockets in /tmp"
-          else
-            echo "sp1-gpu-server CRASHED:"
-            cat /tmp/sp1-gpu-server.log
-          fi
-
+          echo "SP1_PROVER=$SP1_PROVER, GPU: $(ls /dev/nvidia* 2>/dev/null | wc -l) devices"
           exec "${oauth3}/bin/oauth3"
         '';
 
