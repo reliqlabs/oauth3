@@ -105,6 +105,30 @@
           '';
         });
 
+        # gnark DCAP circuit — prove and setup binaries
+        gnarkSrc = pkgs.lib.cleanSourceWith {
+          src = ./circuits/dcap-gnark;
+          filter = path: type:
+            # Include Go source, go.mod/sum, and vendor/
+            (builtins.match ".*\\.go$" path != null) ||
+            (builtins.match ".*/go\\.(mod|sum)$" path != null) ||
+            (builtins.match ".*/vendor(/.*)?$" path != null) ||
+            (type == "directory");
+        };
+
+        gnarkBinaries = pkgs.buildGoModule {
+          pname = "gnark-dcap";
+          version = "0.1.0";
+          src = gnarkSrc;
+          vendorHash = null; # uses committed vendor/
+          subPackages = [ "cmd/prove" "cmd/setup" ];
+          # Rename output binaries for clarity
+          postInstall = ''
+            mv $out/bin/prove $out/bin/gnark-prove
+            mv $out/bin/setup $out/bin/gnark-setup
+          '';
+        };
+
         # SP1 CUDA proving artifacts (x86_64-linux only, bundled into Docker image)
         sp1GpuServerTarball = pkgs.fetchurl {
           url = "https://github.com/succinctlabs/sp1/releases/download/v6.0.2/sp1_gpu_server_v6.0.2_x86_64.tar.gz";
@@ -155,6 +179,21 @@
           mkdir -p "$HOME/.sp1/bin"
           ln -sf "${sp1GpuServerWrapper}/bin/sp1-gpu-server" "$HOME/.sp1/bin/sp1-gpu-server"
           echo "SP1_PROVER=$SP1_PROVER, GPU: $(ls /dev/nvidia* 2>/dev/null | wc -l) devices"
+
+          # gnark proving key setup (one-time, ~2-3 min)
+          GNARK_DATA_DIR="''${GNARK_DATA_DIR:-$HOME/gnark}"
+          mkdir -p "$GNARK_DATA_DIR"
+          if [ ! -f "$GNARK_DATA_DIR/pk.bin" ]; then
+            echo "gnark: generating proving key (first run)..."
+            "${gnarkBinaries}/bin/gnark-setup" -pk "$GNARK_DATA_DIR/pk.bin" -vk "$GNARK_DATA_DIR/vk.bin" && \
+              echo "gnark: proving key generated" || \
+              echo "gnark: setup failed (gnark-cpu proving will be unavailable)"
+          else
+            echo "gnark: proving key found at $GNARK_DATA_DIR/pk.bin"
+          fi
+          export GNARK_PROVE_BINARY="${gnarkBinaries}/bin/gnark-prove"
+          export GNARK_PK_PATH="$GNARK_DATA_DIR/pk.bin"
+
           exec "${oauth3}/bin/oauth3"
         '';
 
@@ -165,6 +204,7 @@
 
           contents = with pkgs; [
             oauth3
+            gnarkBinaries
             sp1Artifacts
             cacert
             postgresql
