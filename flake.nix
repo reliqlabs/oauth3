@@ -20,6 +20,8 @@
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs {
           inherit system overlays;
+          # CUDA runtime (libcudart.so) needed for SP1 GPU proving
+          config.allowUnfree = true;
         };
 
         # Use Rust 1.92 to match rust-toolchain.toml
@@ -119,9 +121,12 @@
           name = "sp1-artifacts";
           dontUnpack = true;
           nativeBuildInputs = [ pkgs.gnutar pkgs.gzip pkgs.autoPatchelfHook ];
-          buildInputs = [ pkgs.stdenv.cc.cc.lib ]; # libstdc++ for sp1-gpu-server
-          # CUDA libs provided at runtime by NVIDIA container runtime
-          autoPatchelfIgnoreMissingDeps = [ "libcudart.so.*" "libcuda.so.*" "libnvidia-ml.so.*" ];
+          buildInputs = [
+            pkgs.stdenv.cc.cc.lib # libstdc++ for sp1-gpu-server
+            pkgs.cudaPackages.cuda_cudart.lib # libcudart.so for CUDA runtime
+          ];
+          # libcuda.so + libnvidia-ml.so provided at runtime by nvidia-container-toolkit
+          autoPatchelfIgnoreMissingDeps = [ "libcuda.so.*" "libnvidia-ml.so.*" ];
           installPhase = ''
             mkdir -p $out/sp1/bin
             mkdir -p $out/sp1/circuits/groth16/v6.0.0
@@ -149,23 +154,8 @@
         oauth3Entrypoint = pkgs.writeShellScript "oauth3-entrypoint" ''
           mkdir -p "$HOME/.sp1/bin"
           ln -sf "${sp1GpuServerWrapper}/bin/sp1-gpu-server" "$HOME/.sp1/bin/sp1-gpu-server"
-          # Diagnostic: check NVIDIA/CUDA availability
-          echo "=== GPU diagnostics ==="
-          echo "NVIDIA_VISIBLE_DEVICES=$NVIDIA_VISIBLE_DEVICES"
-          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-          echo "--- /dev/nvidia* ---"
-          ls -la /dev/nvidia* 2>&1 || echo "No /dev/nvidia devices"
-          echo "--- /usr dirs ---"
-          ls -la /usr/ 2>&1 || echo "/usr does not exist"
-          ls -la /usr/lib/ 2>&1 || echo "/usr/lib does not exist"
-          ls -la /usr/lib/x86_64-linux-gnu/ 2>&1 | head -10 || echo "/usr/lib/x86_64-linux-gnu/ missing or empty"
-          ls -la /usr/lib64/ 2>&1 | head -20 || echo "/usr/lib64 missing"
-          ls -la /usr/bin/nvidia* 2>&1 || echo "No nvidia binaries in /usr/bin"
-          echo "--- libcuda search ---"
-          find / -name "libcuda.so*" -o -name "libcudart.so*" 2>/dev/null | head -10
-          echo "--- nvidia-smi ---"
-          nvidia-smi 2>&1 || /usr/bin/nvidia-smi 2>&1 || echo "nvidia-smi not available"
-          echo "=== end GPU diagnostics ==="
+          # Quick GPU check
+          echo "GPU: $(ls /dev/nvidia* 2>/dev/null | wc -l) devices, LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
           exec "${oauth3}/bin/oauth3"
         '';
 
