@@ -154,12 +154,11 @@
         oauth3Entrypoint = pkgs.writeShellScript "oauth3-entrypoint" ''
           mkdir -p "$HOME/.sp1/bin"
           ln -sf "${sp1GpuServerWrapper}/bin/sp1-gpu-server" "$HOME/.sp1/bin/sp1-gpu-server"
-          # GPU diagnostics
           echo "GPU: $(ls /dev/nvidia* 2>/dev/null | wc -l) devices, LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-          echo "--- ldd sp1-gpu-server ---"
-          LD_LIBRARY_PATH="/usr/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH" ldd "${sp1Artifacts}/sp1/bin/sp1-gpu-server" 2>&1 | head -30
-          echo "--- test sp1-gpu-server launch ---"
-          timeout 5 "${sp1GpuServerWrapper}/bin/sp1-gpu-server" --help 2>&1 || echo "exit code: $?"
+          echo "--- sp1-gpu-server CUDA init test (5s timeout) ---"
+          timeout 5 "${sp1GpuServerWrapper}/bin/sp1-gpu-server" 2>&1 || echo "sp1-gpu-server exit: $?"
+          echo "--- LD_DEBUG=libs sp1-gpu-server (3s) ---"
+          LD_DEBUG=libs timeout 3 "${sp1GpuServerWrapper}/bin/sp1-gpu-server" 2>&1 | grep -i 'cuda\|error\|not found' | head -20 || true
           echo "--- end diagnostics ---"
           exec "${oauth3}/bin/oauth3"
         '';
