@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 
+pub mod gnark;
 pub mod sp1;
 
 /// Output proof format (SnarkJS-compatible)
@@ -12,13 +13,25 @@ pub struct ProofOutput {
     pub zkvm: String,
 }
 
+/// Which proving backend to use.
+#[derive(Debug, Clone)]
+pub enum ProverBackend {
+    /// SP1 Groth16 (CPU/GPU/Network selected by SP1_PROVER env at startup)
+    Sp1,
+    /// gnark Go binary subprocess
+    Gnark {
+        binary_path: String,
+        pk_path: String,
+    },
+}
+
 /// Generate a Groth16 ZK proof for a raw TDX quote.
 ///
-/// This is the full pipeline:
+/// Shared pipeline:
 /// 1. Fetch collateral from Intel PCS
 /// 2. Extract pre-verified inputs (cert chain validation on host)
-/// 3. Generate SP1 Groth16 proof (lite guest — steps 4-10 in zkVM)
-pub async fn prove_quote(quote: &[u8]) -> Result<ProofOutput> {
+/// 3. Dispatch to the selected backend for proof generation
+pub async fn prove_quote(quote: &[u8], backend: &ProverBackend) -> Result<ProofOutput> {
     tracing::info!("prove_quote: fetching Intel PCS collateral...");
     let collateral = dcap_qvl::collateral::get_collateral_from_pcs(quote)
         .await
@@ -33,7 +46,19 @@ pub async fn prove_quote(quote: &[u8]) -> Result<ProofOutput> {
     let pre_verified =
         dcap_qvl::verify::rustcrypto::extract_pre_verified(quote, &collateral, now_secs)
             .context("failed to extract pre-verified inputs")?;
-    tracing::info!("prove_quote: pre-verified inputs extracted, starting SP1 proof...");
+    tracing::info!("prove_quote: pre-verified inputs extracted");
 
-    sp1::generate_proof(quote, &pre_verified, now_secs).await
+    match backend {
+        ProverBackend::Sp1 => {
+            tracing::info!("prove_quote: dispatching to SP1 backend");
+            sp1::generate_proof(quote, &pre_verified, now_secs).await
+        }
+        ProverBackend::Gnark {
+            binary_path,
+            pk_path,
+        } => {
+            tracing::info!("prove_quote: dispatching to gnark backend");
+            gnark::generate_proof(quote, &pre_verified, now_secs, binary_path, pk_path).await
+        }
+    }
 }

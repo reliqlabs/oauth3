@@ -11,26 +11,26 @@ use serde_json::{json, Value};
 
 use crate::app::AppState;
 use crate::attestation::DstackClient;
-use crate::models::prove_job::ProveJob;
+use crate::models::prove_job::{ProveJob, ProverType};
 
 pub async fn prove_middleware(
     State(state): State<AppState>,
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let should_prove = request
+    let prover_type = request
         .uri()
         .query()
         .and_then(|q| {
             url::form_urlencoded::parse(q.as_bytes())
                 .find(|(key, _)| key == "prove")
-                .map(|(_, value)| value == "true" || value == "1")
-        })
-        .unwrap_or(false);
+                .and_then(|(_, value)| ProverType::from_query_value(&value))
+        });
 
-    if !should_prove {
-        return Ok(next.run(request).await);
-    }
+    let prover_type = match prover_type {
+        Some(pt) => pt,
+        None => return Ok(next.run(request).await),
+    };
 
     let request_uri = request.uri().to_string();
     let response = next.run(request).await;
@@ -72,6 +72,7 @@ pub async fn prove_middleware(
         error_message: None,
         created_at: now.clone(),
         updated_at: now,
+        prover_type: prover_type.as_str().to_string(),
     };
 
     state.accounts.create_prove_job(job).await.map_err(|e| {
@@ -82,6 +83,7 @@ pub async fn prove_middleware(
     let resp = json!({
         "job_id": job_id,
         "status": "pending",
+        "prover_type": prover_type.as_str(),
         "poll_url": format!("/prove/{}", job_id),
     });
 

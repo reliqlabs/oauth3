@@ -76,6 +76,7 @@ diesel::table! {
         error_message -> Nullable<Text>,
         created_at -> Text,
         updated_at -> Text,
+        prover_type -> Text,
     }
 }
 

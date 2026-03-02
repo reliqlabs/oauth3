@@ -10747,6 +10747,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sp1-sdk",
+ "tempfile",
  "tokio",
  "tracing",
  "zkdcap-core",

@@ -41,7 +41,11 @@ lcov.info
 coverage.xml
 cobertura.xml
 
+# Misc build artifacts
+result/
+sqlite::memory:
+
 # Temporary files
 .tmp/
 *.tmp
-.tmp-* 
+.tmp-*

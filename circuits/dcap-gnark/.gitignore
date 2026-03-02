@@ -1,0 +1,14 @@
+# Go build output (root-level binaries)
+/prove
+/setup
+/verify
+/gen-fixture
+
+# Proving artifacts
+pk.bin
+vk.bin
+proof.json
+result/
+
+# OS
+.DS_Store

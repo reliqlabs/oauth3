@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::app::AppState;
 use crate::attestation::DstackClient;
-use crate::models::prove_job::ProveJob;
+use crate::models::prove_job::{ProveJob, ProverType};
 
 pub fn spawn_prove_worker(state: AppState) {
     tokio::spawn(async move {
@@ -21,7 +21,7 @@ pub fn spawn_prove_worker(state: AppState) {
             match state.accounts.claim_next_prove_job().await {
                 Ok(Some(job)) => {
                     let job_id = job.id.clone();
-                    tracing::info!(job_id = %job_id, "processing prove job");
+                    tracing::info!(job_id = %job_id, prover_type = %job.prover_type, "processing prove job");
 
                     // Catch panics so the worker loop survives
                     let result =
@@ -48,6 +48,7 @@ pub fn spawn_prove_worker(state: AppState) {
                             quote_hex: None,
                             proof_json: None,
                             created_at: String::new(),
+                            prover_type: String::new(),
                         };
                         let _ = state.accounts.update_prove_job(&fail_job).await;
                     }
@@ -99,11 +100,21 @@ async fn process_job(state: &AppState, mut job: ProveJob) {
     job.updated_at = now();
     let _ = state.accounts.update_prove_job(&job).await;
 
-    // Step 2: Generate ZK proof (PCS collateral + pre-verify + SP1 Groth16)
-    tracing::info!(job_id = %job.id, "starting prove_quote pipeline...");
-    match zkdcap_host::prove_quote(&quote_bytes).await {
+    // Step 2: Resolve prover backend from job.prover_type
+    let backend = match ProverType::from_db(&job.prover_type) {
+        Some(ProverType::GnarkCpu | ProverType::GnarkGpu) => {
+            let binary = std::env::var("GNARK_PROVE_BINARY").unwrap_or_else(|_| "gnark-prove".into());
+            let pk = std::env::var("GNARK_PK_PATH").unwrap_or_else(|_| "pk.bin".into());
+            zkdcap_host::ProverBackend::Gnark { binary_path: binary, pk_path: pk }
+        }
+        _ => zkdcap_host::ProverBackend::Sp1,
+    };
+
+    // Step 3: Generate ZK proof
+    tracing::info!(job_id = %job.id, prover_type = %job.prover_type, "starting prove pipeline...");
+    match zkdcap_host::prove_quote(&quote_bytes, &backend).await {
         Ok(proof_output) => {
-            // Include the full gnark proof (pi_a/b/c + commitment fields)
+            // Include the full proof (pi_a/b/c + optional commitment fields)
             let mut proof_value = json!({
                 "pi_a": proof_output.proof["pi_a"],
                 "pi_b": proof_output.proof["pi_b"],
@@ -121,13 +132,17 @@ async fn process_job(state: &AppState, mut job: ProveJob) {
             if let Some(p) = proof_output.proof.get("commitment_pok") {
                 proof_value["commitment_pok"] = p.clone();
             }
+            // gnark public_inputs (if present — nested object from gnark witness)
+            if let Some(pi) = proof_output.proof.get("public_inputs") {
+                proof_value["public_inputs"] = pi.clone();
+            }
             job.status = "completed".to_string();
             job.proof_json = Some(proof_value.to_string());
             job.updated_at = now();
             tracing::info!(job_id = %job.id, "prove job completed");
         }
         Err(e) => {
-            tracing::error!(job_id = %job.id, error = ?e, "prove_quote failed");
+            tracing::error!(job_id = %job.id, error = ?e, "prove pipeline failed");
             job.status = "failed".to_string();
             job.error_message = Some(format!("proof generation failed: {e}"));
             job.updated_at = now();

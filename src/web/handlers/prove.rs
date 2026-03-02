@@ -27,6 +27,7 @@ pub async fn get_prove_status(
                     Json(json!({
                         "job_id": job.id,
                         "status": "completed",
+                        "prover_type": job.prover_type,
                         "data": data,
                         "proof": proof,
                     })),
@@ -38,6 +39,7 @@ pub async fn get_prove_status(
                 Json(json!({
                     "job_id": job.id,
                     "status": "failed",
+                    "prover_type": job.prover_type,
                     "error": job.error_message,
                 })),
             )
@@ -47,6 +49,7 @@ pub async fn get_prove_status(
                 Json(json!({
                     "job_id": job.id,
                     "status": status,
+                    "prover_type": job.prover_type,
                 })),
             )
                 .into_response(),
