@@ -141,12 +141,24 @@
             echo "6.0.2"
             exit 0
           fi
+          # NVIDIA container runtime mounts CUDA libs here
+          export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda/lib64:''${LD_LIBRARY_PATH:-}"
           exec "${sp1Artifacts}/sp1/bin/sp1-gpu-server" "$@"
         '';
 
         oauth3Entrypoint = pkgs.writeShellScript "oauth3-entrypoint" ''
           mkdir -p "$HOME/.sp1/bin"
           ln -sf "${sp1GpuServerWrapper}/bin/sp1-gpu-server" "$HOME/.sp1/bin/sp1-gpu-server"
+          # Diagnostic: check NVIDIA/CUDA availability
+          echo "=== GPU diagnostics ==="
+          echo "NVIDIA_VISIBLE_DEVICES=$NVIDIA_VISIBLE_DEVICES"
+          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+          ls -la /usr/lib/x86_64-linux-gnu/libcuda* 2>/dev/null || echo "No CUDA libs in /usr/lib/x86_64-linux-gnu/"
+          ls -la /usr/local/nvidia/lib64/libcuda* 2>/dev/null || echo "No CUDA libs in /usr/local/nvidia/lib64/"
+          ls -la /usr/local/cuda/lib64/libcuda* 2>/dev/null || echo "No CUDA libs in /usr/local/cuda/lib64/"
+          find / -name "libcudart.so*" 2>/dev/null | head -5 || echo "libcudart.so not found anywhere"
+          nvidia-smi 2>/dev/null || echo "nvidia-smi not found or failed"
+          echo "=== end GPU diagnostics ==="
           exec "${oauth3}/bin/oauth3"
         '';
 
