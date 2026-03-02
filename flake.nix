@@ -135,10 +135,18 @@
           '';
         };
 
-        # Wrapper script: symlinks gpu-server to $HOME/.sp1/bin/ (hardcoded in sp1-cuda)
+        # Wrapper: version shim so SP1 SDK skips re-download, delegates to real binary
+        sp1GpuServerWrapper = pkgs.writeShellScriptBin "sp1-gpu-server" ''
+          if [ "$1" = "--version" ]; then
+            echo "6.0.2"
+            exit 0
+          fi
+          exec "${sp1Artifacts}/sp1/bin/sp1-gpu-server" "$@"
+        '';
+
         oauth3Entrypoint = pkgs.writeShellScript "oauth3-entrypoint" ''
           mkdir -p "$HOME/.sp1/bin"
-          ln -sf "${sp1Artifacts}/sp1/bin/sp1-gpu-server" "$HOME/.sp1/bin/sp1-gpu-server"
+          ln -sf "${sp1GpuServerWrapper}/bin/sp1-gpu-server" "$HOME/.sp1/bin/sp1-gpu-server"
           exec "${oauth3}/bin/oauth3"
         '';
 
