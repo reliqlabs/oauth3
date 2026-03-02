@@ -141,6 +141,8 @@
             echo "6.0.2"
             exit 0
           fi
+          # nvidia-container-toolkit mounts CUDA libs to /usr/lib64/ (Yocto host)
+          export LD_LIBRARY_PATH="/usr/lib64:/usr/lib/x86_64-linux-gnu:''${LD_LIBRARY_PATH:-}"
           exec "${sp1Artifacts}/sp1/bin/sp1-gpu-server" "$@"
         '';
 
@@ -157,6 +159,7 @@
           ls -la /usr/ 2>&1 || echo "/usr does not exist"
           ls -la /usr/lib/ 2>&1 || echo "/usr/lib does not exist"
           ls -la /usr/lib/x86_64-linux-gnu/ 2>&1 | head -10 || echo "/usr/lib/x86_64-linux-gnu/ missing or empty"
+          ls -la /usr/lib64/ 2>&1 | head -20 || echo "/usr/lib64 missing"
           ls -la /usr/bin/nvidia* 2>&1 || echo "No nvidia binaries in /usr/bin"
           echo "--- libcuda search ---"
           find / -name "libcuda.so*" -o -name "libcudart.so*" 2>/dev/null | head -10
@@ -186,8 +189,10 @@
 
           # nvidia-container-toolkit bind-mounts CUDA libs + binaries into these paths.
           # Must be real directories in the image root (not Nix store symlinks).
+          # Yocto dstack uses /usr/lib64/, Debian uses /usr/lib/x86_64-linux-gnu/.
           extraCommands = ''
             mkdir -p usr/lib/x86_64-linux-gnu
+            mkdir -p usr/lib64
             mkdir -p usr/bin
           '';
 
@@ -198,8 +203,9 @@
               "HOME=/tmp"
               # Point SP1 at pre-bundled Groth16 circuit artifacts (read-only is fine)
               "SP1_GROTH16_CIRCUIT_PATH=${sp1Artifacts}/sp1/circuits/groth16"
-              # nvidia-container-toolkit mounts CUDA libs to /usr/lib/x86_64-linux-gnu/
-              "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu"
+              # nvidia-container-toolkit mounts CUDA libs from host
+              # Yocto-based dstack host uses /usr/lib64/, Debian uses /usr/lib/x86_64-linux-gnu/
+              "LD_LIBRARY_PATH=/usr/lib64:/usr/lib/x86_64-linux-gnu"
             ];
             ExposedPorts = {
               "8080/tcp" = {};
