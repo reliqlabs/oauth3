@@ -17,6 +17,8 @@ services:
   app:
     image: ${DOCKER_IMAGE}
     restart: unless-stopped
+    # nvidia-container-runtime is registered in dstack-nvidia-dev guest VM
+    # It auto-injects /dev/nvidia* devices and CUDA libs when NVIDIA_VISIBLE_DEVICES is set
     runtime: nvidia
     depends_on:
       db:
@@ -27,14 +29,11 @@ services:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [gpu]
+              capabilities: [gpu, compute, utility]
     volumes:
       # Mount dstack socket for TEE operations
       - /var/run/dstack.sock:/var/run/dstack.sock
-      # Mount host NVIDIA/CUDA libs (dstack GPU CVM has these installed)
-      - /usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:ro
-      - /usr/local/cuda:/usr/local/cuda:ro
-      - /usr/bin/nvidia-smi:/usr/bin/nvidia-smi:ro
+      # Do NOT mount nvidia libs manually — nvidia-container-runtime handles this
     environment:
       DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/oauth3
       APP_BIND_ADDR: ${APP_BIND_ADDR:-0.0.0.0:8080}
@@ -45,10 +44,9 @@ services:
       # SP1 proving mode: cpu (default), cuda (GPU), or network (Succinct prover network)
       SP1_PROVER: ${SP1_PROVER:-cpu}
       NETWORK_PRIVATE_KEY: ${NETWORK_PRIVATE_KEY:-}
-      # NVIDIA GPU passthrough
+      # Tells nvidia-container-runtime which GPUs and capabilities to expose
       NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: all
-      LD_LIBRARY_PATH: /usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
       # Google OAuth provider
       PROVIDER_GOOGLE_TYPE: ${PROVIDER_GOOGLE_TYPE}
       PROVIDER_GOOGLE_MODE: ${PROVIDER_GOOGLE_MODE}

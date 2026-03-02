@@ -135,14 +135,19 @@
           '';
         };
 
+        # nvidia-container-toolkit bind-mounts CUDA libs into /usr/lib/x86_64-linux-gnu/
+        # and binaries into /usr/bin/. Nix images lack these dirs, so create them.
+        nvidiaContainerCompat = pkgs.runCommand "nvidia-container-compat" {} ''
+          mkdir -p $out/usr/lib/x86_64-linux-gnu
+          mkdir -p $out/usr/bin
+        '';
+
         # Wrapper: version shim so SP1 SDK skips re-download, delegates to real binary
         sp1GpuServerWrapper = pkgs.writeShellScriptBin "sp1-gpu-server" ''
           if [ "$1" = "--version" ]; then
             echo "6.0.2"
             exit 0
           fi
-          # NVIDIA container runtime mounts CUDA libs here
-          export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda/lib64:''${LD_LIBRARY_PATH:-}"
           exec "${sp1Artifacts}/sp1/bin/sp1-gpu-server" "$@"
         '';
 
@@ -170,6 +175,7 @@
           contents = with pkgs; [
             oauth3
             sp1Artifacts
+            nvidiaContainerCompat
             cacert
             postgresql
             bashInteractive
@@ -187,6 +193,8 @@
               "HOME=/tmp"
               # Point SP1 at pre-bundled Groth16 circuit artifacts (read-only is fine)
               "SP1_GROTH16_CIRCUIT_PATH=${sp1Artifacts}/sp1/circuits/groth16"
+              # nvidia-container-toolkit mounts CUDA libs to /usr/lib/x86_64-linux-gnu/
+              "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu"
             ];
             ExposedPorts = {
               "8080/tcp" = {};
