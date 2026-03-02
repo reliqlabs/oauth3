@@ -103,7 +103,8 @@ async fn process_job(state: &AppState, mut job: ProveJob) {
     tracing::info!(job_id = %job.id, "starting prove_quote pipeline...");
     match zkdcap_host::prove_quote(&quote_bytes).await {
         Ok(proof_output) => {
-            let proof_value = json!({
+            // Include the full gnark proof (pi_a/b/c + commitment fields)
+            let mut proof_value = json!({
                 "pi_a": proof_output.proof["pi_a"],
                 "pi_b": proof_output.proof["pi_b"],
                 "pi_c": proof_output.proof["pi_c"],
@@ -113,6 +114,13 @@ async fn process_job(state: &AppState, mut job: ProveJob) {
                 "journal": proof_output.journal,
                 "zkvm": proof_output.zkvm,
             });
+            // SP1 v6 Keccak commitment fields (if present)
+            if let Some(c) = proof_output.proof.get("commitment") {
+                proof_value["commitment"] = c.clone();
+            }
+            if let Some(p) = proof_output.proof.get("commitment_pok") {
+                proof_value["commitment_pok"] = p.clone();
+            }
             job.status = "completed".to_string();
             job.proof_json = Some(proof_value.to_string());
             job.updated_at = now();
