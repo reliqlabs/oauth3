@@ -115,19 +115,23 @@
         };
 
         # Pre-extract SP1 artifacts into a derivation at /sp1/
-        sp1Artifacts = pkgs.runCommand "sp1-artifacts" {
-          nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ];
-        } ''
-          mkdir -p $out/sp1/bin
-          mkdir -p $out/sp1/circuits/groth16/v6.0.0
+        sp1Artifacts = pkgs.stdenv.mkDerivation {
+          name = "sp1-artifacts";
+          dontUnpack = true;
+          nativeBuildInputs = [ pkgs.gnutar pkgs.gzip pkgs.autoPatchelfHook ];
+          buildInputs = [ pkgs.stdenv.cc.cc.lib ]; # libstdc++ for sp1-gpu-server
+          installPhase = ''
+            mkdir -p $out/sp1/bin
+            mkdir -p $out/sp1/circuits/groth16/v6.0.0
 
-          # sp1-gpu-server binary (tarball contains bare "sp1-gpu-server")
-          tar -xzf ${sp1GpuServerTarball} -C $out/sp1/bin
-          chmod +x $out/sp1/bin/sp1-gpu-server
+            # sp1-gpu-server binary (tarball contains bare "sp1-gpu-server")
+            tar -xzf ${sp1GpuServerTarball} -C $out/sp1/bin
+            chmod +x $out/sp1/bin/sp1-gpu-server
 
-          # Groth16 circuit artifacts (~8.5GB extracted)
-          tar -xzf ${groth16ArtifactsTarball} -C $out/sp1/circuits/groth16/v6.0.0
-        '';
+            # Groth16 circuit artifacts (~8.5GB extracted)
+            tar -xzf ${groth16ArtifactsTarball} -C $out/sp1/circuits/groth16/v6.0.0
+          '';
+        };
 
         # Wrapper script: symlinks gpu-server to $HOME/.sp1/bin/ (hardcoded in sp1-cuda)
         oauth3Entrypoint = pkgs.writeShellScript "oauth3-entrypoint" ''
@@ -150,6 +154,8 @@
             coreutils
             gnutar
             gzip
+            # glibc + libstdc++ needed at runtime for sp1-gpu-server (patched by autoPatchelfHook)
+            stdenv.cc.cc.lib
           ];
 
           config = {
