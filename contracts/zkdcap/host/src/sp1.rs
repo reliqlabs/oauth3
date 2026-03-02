@@ -71,10 +71,9 @@ pub async fn generate_proof(
     })
 }
 
-/// Convert SP1's gnark-format Groth16 proof to SnarkJS JSON format.
+/// Convert SP1's gnark-format Groth16 proof to SnarkJS-compatible JSON.
 ///
-/// SP1's `encoded_proof` is the hex-encoded output of gnark's `MarshalSolidity()`,
-/// which produces 256 bytes in this layout:
+/// SP1 v6 uses gnark with Keccak commitment, producing 352 bytes:
 ///   - Ar.X  (32B) — G1 pi_a x
 ///   - Ar.Y  (32B) — G1 pi_a y
 ///   - Bs.X.A1 (32B) — G2 pi_b x imaginary
@@ -83,18 +82,16 @@ pub async fn generate_proof(
 ///   - Bs.Y.A0 (32B) — G2 pi_b y real
 ///   - Krs.X (32B) — G1 pi_c x
 ///   - Krs.Y (32B) — G1 pi_c y
-///
-/// SnarkJS expects decimal string arrays:
-///   pi_a: [x, y, "1"]
-///   pi_b: [[x_real, x_imag], [y_real, y_imag], ["1", "0"]]
-///   pi_c: [x, y, "1"]
+///   - Commitment.X (32B) — G1 commitment x
+///   - Commitment.Y (32B) — G1 commitment y
+///   - CommitmentPok (32B) — scalar proof of knowledge
 fn convert_gnark_to_snarkjs(encoded_proof_hex: &str) -> Result<serde_json::Value> {
     let proof_bytes =
         hex::decode(encoded_proof_hex).context("invalid hex in encoded_proof")?;
 
-    if proof_bytes.len() != 256 {
+    if proof_bytes.len() != 352 {
         bail!(
-            "expected 256-byte gnark proof, got {} bytes",
+            "expected 352-byte gnark proof (with commitment), got {} bytes",
             proof_bytes.len()
         );
     }
@@ -117,6 +114,11 @@ fn convert_gnark_to_snarkjs(encoded_proof_hex: &str) -> Result<serde_json::Value
     let krs_x = to_decimal(&proof_bytes[192..224]);
     let krs_y = to_decimal(&proof_bytes[224..256]);
 
+    // Keccak commitment (SP1 v6 gnark)
+    let commit_x = to_decimal(&proof_bytes[256..288]);
+    let commit_y = to_decimal(&proof_bytes[288..320]);
+    let commit_pok = to_decimal(&proof_bytes[320..352]);
+
     Ok(serde_json::json!({
         "pi_a": [ar_x, ar_y, "1"],
         "pi_b": [
@@ -125,6 +127,8 @@ fn convert_gnark_to_snarkjs(encoded_proof_hex: &str) -> Result<serde_json::Value
             ["1", "0"]
         ],
         "pi_c": [krs_x, krs_y, "1"],
+        "commitment": [commit_x, commit_y],
+        "commitment_pok": commit_pok,
         "protocol": "groth16",
         "curve": "bn128"
     }))
@@ -136,8 +140,8 @@ mod tests {
 
     #[test]
     fn test_convert_gnark_to_snarkjs() {
-        // Create a synthetic 256-byte proof with known values
-        let mut proof_bytes = vec![0u8; 256];
+        // Create a synthetic 352-byte proof with known values (SP1 v6 with commitment)
+        let mut proof_bytes = vec![0u8; 352];
         // Set Ar.X = 1
         proof_bytes[31] = 1;
         // Set Ar.Y = 2
@@ -154,6 +158,12 @@ mod tests {
         proof_bytes[223] = 7;
         // Set Krs.Y = 8
         proof_bytes[255] = 8;
+        // Set Commitment.X = 9
+        proof_bytes[287] = 9;
+        // Set Commitment.Y = 10
+        proof_bytes[319] = 10;
+        // Set CommitmentPok = 11
+        proof_bytes[351] = 11;
 
         let hex_proof = hex::encode(&proof_bytes);
         let result = convert_gnark_to_snarkjs(&hex_proof).unwrap();
@@ -174,6 +184,10 @@ mod tests {
         assert_eq!(result["pi_c"][0], "7");
         assert_eq!(result["pi_c"][1], "8");
         assert_eq!(result["pi_c"][2], "1");
+
+        assert_eq!(result["commitment"][0], "9");
+        assert_eq!(result["commitment"][1], "10");
+        assert_eq!(result["commitment_pok"], "11");
 
         assert_eq!(result["protocol"], "groth16");
         assert_eq!(result["curve"], "bn128");
