@@ -1,6 +1,6 @@
 module github.com/reliqlabs/oauth3/circuits/dcap-gnark
 
-go 1.25.0
+go 1.24.0
 
 require (
 	github.com/consensys/gnark v0.14.0

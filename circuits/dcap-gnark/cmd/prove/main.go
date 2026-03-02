@@ -117,7 +117,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "extract public witness: %v\n", err)
 		os.Exit(1)
 	}
-	schema, err := frontend.NewSchema(&circuit.DcapCircuit{})
+	schema, err := frontend.NewSchema(ecc.BN254.ScalarField(), &circuit.DcapCircuit{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create schema: %v\n", err)
 		os.Exit(1)
