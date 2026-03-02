@@ -120,6 +120,8 @@
           dontUnpack = true;
           nativeBuildInputs = [ pkgs.gnutar pkgs.gzip pkgs.autoPatchelfHook ];
           buildInputs = [ pkgs.stdenv.cc.cc.lib ]; # libstdc++ for sp1-gpu-server
+          # CUDA libs provided at runtime by NVIDIA container runtime
+          autoPatchelfIgnoreMissingDeps = [ "libcudart.so.*" "libcuda.so.*" "libnvidia-ml.so.*" ];
           installPhase = ''
             mkdir -p $out/sp1/bin
             mkdir -p $out/sp1/circuits/groth16/v6.0.0
