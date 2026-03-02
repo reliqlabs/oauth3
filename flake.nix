@@ -154,12 +154,7 @@
         oauth3Entrypoint = pkgs.writeShellScript "oauth3-entrypoint" ''
           mkdir -p "$HOME/.sp1/bin"
           ln -sf "${sp1GpuServerWrapper}/bin/sp1-gpu-server" "$HOME/.sp1/bin/sp1-gpu-server"
-          echo "GPU: $(ls /dev/nvidia* 2>/dev/null | wc -l) devices, LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-          echo "--- sp1-gpu-server CUDA init test (5s timeout) ---"
-          timeout 5 "${sp1GpuServerWrapper}/bin/sp1-gpu-server" 2>&1 || echo "sp1-gpu-server exit: $?"
-          echo "--- LD_DEBUG=libs sp1-gpu-server (3s) ---"
-          LD_DEBUG=libs timeout 3 "${sp1GpuServerWrapper}/bin/sp1-gpu-server" 2>&1 | grep -i 'cuda\|error\|not found' | head -20 || true
-          echo "--- end diagnostics ---"
+          echo "GPU: $(ls /dev/nvidia* 2>/dev/null | wc -l) devices, CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
           exec "${oauth3}/bin/oauth3"
         '';
 
@@ -200,6 +195,8 @@
               # nvidia-container-toolkit mounts CUDA libs from host
               # Yocto-based dstack host uses /usr/lib64/, Debian uses /usr/lib/x86_64-linux-gnu/
               "LD_LIBRARY_PATH=/usr/lib64:/usr/lib/x86_64-linux-gnu"
+              # sp1-gpu-server requires CUDA_VISIBLE_DEVICES (panics without it)
+              "CUDA_VISIBLE_DEVICES=all"
             ];
             ExposedPorts = {
               "8080/tcp" = {};
