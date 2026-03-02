@@ -17,6 +17,7 @@ services:
   app:
     image: ${DOCKER_IMAGE}
     restart: unless-stopped
+    runtime: nvidia
     depends_on:
       db:
         condition: service_healthy
@@ -30,6 +31,10 @@ services:
     volumes:
       # Mount dstack socket for TEE operations
       - /var/run/dstack.sock:/var/run/dstack.sock
+      # Mount host NVIDIA/CUDA libs (dstack GPU CVM has these installed)
+      - /usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:ro
+      - /usr/local/cuda:/usr/local/cuda:ro
+      - /usr/bin/nvidia-smi:/usr/bin/nvidia-smi:ro
     environment:
       DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/oauth3
       APP_BIND_ADDR: ${APP_BIND_ADDR:-0.0.0.0:8080}
@@ -43,6 +48,7 @@ services:
       # NVIDIA GPU passthrough
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: all
+      LD_LIBRARY_PATH: /usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64
       # Google OAuth provider
       PROVIDER_GOOGLE_TYPE: ${PROVIDER_GOOGLE_TYPE}
       PROVIDER_GOOGLE_MODE: ${PROVIDER_GOOGLE_MODE}
