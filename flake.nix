@@ -135,13 +135,6 @@
           '';
         };
 
-        # nvidia-container-toolkit bind-mounts CUDA libs into /usr/lib/x86_64-linux-gnu/
-        # and binaries into /usr/bin/. Nix images lack these dirs, so create them.
-        nvidiaContainerCompat = pkgs.runCommand "nvidia-container-compat" {} ''
-          mkdir -p $out/usr/lib/x86_64-linux-gnu
-          mkdir -p $out/usr/bin
-        '';
-
         # Wrapper: version shim so SP1 SDK skips re-download, delegates to real binary
         sp1GpuServerWrapper = pkgs.writeShellScriptBin "sp1-gpu-server" ''
           if [ "$1" = "--version" ]; then
@@ -175,7 +168,6 @@
           contents = with pkgs; [
             oauth3
             sp1Artifacts
-            nvidiaContainerCompat
             cacert
             postgresql
             bashInteractive
@@ -185,6 +177,13 @@
             # glibc + libstdc++ needed at runtime for sp1-gpu-server (patched by autoPatchelfHook)
             stdenv.cc.cc.lib
           ];
+
+          # nvidia-container-toolkit bind-mounts CUDA libs + binaries into these paths.
+          # Must be real directories in the image root (not Nix store symlinks).
+          extraCommands = ''
+            mkdir -p usr/lib/x86_64-linux-gnu
+            mkdir -p usr/bin
+          '';
 
           config = {
             Cmd = [ oauth3Entrypoint ];
