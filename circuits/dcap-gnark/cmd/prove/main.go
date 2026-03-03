@@ -164,8 +164,14 @@ func (p *Prover) handleProve(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Printf("Proved in %v\n", elapsed)
 
+	respBytes, err := json.Marshal(snarkProof)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("marshal proof: %v", err), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(snarkProof)
+	w.Header().Set("Content-Length", strconv.Itoa(len(respBytes)))
+	w.Write(respBytes)
 }
 
 func runServer(prover *Prover, socketPath string) {
