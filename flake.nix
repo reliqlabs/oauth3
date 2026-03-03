@@ -137,18 +137,21 @@
           hash = "sha256-kbXwg1cF72flzpl1+20D+smYKgl7Aslbf1KSCi6ur34=";
         };
 
-        # Icicle v3.2.0 — core shared libs (CPU) for CGO linking + runtime
+        # Icicle v3.2.0 — core shared libs (CPU) for CGO linking + runtime.
+        # Libs placed at $out/lib/ (standard Nix path) so autoPatchelfHook resolves them.
         icicleCoreLibs = pkgs.stdenv.mkDerivation {
           name = "icicle-core-libs-3.2.0";
           dontUnpack = true;
           nativeBuildInputs = [ pkgs.gnutar pkgs.gzip pkgs.autoPatchelfHook ];
           buildInputs = [ pkgs.stdenv.cc.cc.lib ];
           installPhase = ''
-            mkdir -p $out
+            mkdir -p $out/lib
             tar -xzf ${pkgs.fetchurl {
               url = "https://github.com/ingonyama-zk/icicle/releases/download/v3.2.0/icicle_3_2_0-ubuntu22.tar.gz";
               hash = "sha256-dJRf72/qlMr6KfNdnVq6+DEif3O3t4LCMc33fs2sgfs=";
             }} -C $out
+            mv $out/icicle/lib/*.so $out/lib/
+            rm -rf $out/icicle
           '';
         };
 
@@ -160,15 +163,17 @@
           buildInputs = [
             pkgs.stdenv.cc.cc.lib
             pkgs.cudaPackages.cuda_cudart.lib
-            icicleCoreLibs # CUDA plugins link against core icicle libs
+            icicleCoreLibs # CUDA plugins link against core icicle libs (found at lib/)
           ];
           autoPatchelfIgnoreMissingDeps = [ "libcuda.so.*" "libnvidia-ml.so.*" ];
           installPhase = ''
-            mkdir -p $out/icicle/lib
+            mkdir -p $out/lib
             tar -xzf ${pkgs.fetchurl {
               url = "https://github.com/ingonyama-zk/icicle/releases/download/v3.2.0/icicle_3_2_0-ubuntu22-cuda122.tar.gz";
               hash = "sha256-JH8LgXGae7jMK8IkPjYrBeVBOSxRfMKO3tOss7JUmMg=";
-            }} -C $out --strip-components=0 "icicle/lib/backend"
+            }} -C $out
+            mv $out/icicle/lib/backend $out/lib/backend
+            rm -rf $out/icicle
           '';
         };
 
@@ -183,7 +188,7 @@
           tags = [ "icicle" ];
           nativeBuildInputs = [ pkgs.autoPatchelfHook ];
           buildInputs = [ icicleCoreLibs pkgs.stdenv.cc.cc.lib ];
-          CGO_LDFLAGS = "-L${icicleCoreLibs}/icicle/lib";
+          CGO_LDFLAGS = "-L${icicleCoreLibs}/lib";
           preBuild = ''
             # Copy icicle-gnark Go wrapper CGO headers into vendor tree.
             # go mod vendor doesn't copy .h files from include/ subdirectories
@@ -321,7 +326,7 @@
               # sp1-gpu-server requires CUDA_VISIBLE_DEVICES as a single numeric device ID
               "CUDA_VISIBLE_DEVICES=0"
               # Icicle CUDA backend plugins for gnark GPU proving
-              "ICICLE_BACKEND_INSTALL_DIR=${icicleCudaBackend}/icicle/lib/backend"
+              "ICICLE_BACKEND_INSTALL_DIR=${icicleCudaBackend}/lib/backend"
             ];
             ExposedPorts = {
               "8080/tcp" = {};
