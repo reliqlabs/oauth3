@@ -276,7 +276,8 @@
           else
             echo "gnark: proving key found at $GNARK_DATA_DIR/pk.bin"
           fi
-          export GNARK_PROVE_BINARY="${gnarkProveIcicle}/bin/gnark-prove"
+          export GNARK_PROVE_BINARY="${gnarkBinaries}/bin/gnark-prove"
+          export GNARK_PROVE_GPU_BINARY="${gnarkProveIcicle}/bin/gnark-prove"
           export GNARK_PK_PATH="$GNARK_DATA_DIR/pk.bin"
 
           exec "${oauth3}/bin/oauth3"

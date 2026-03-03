@@ -101,9 +101,13 @@ async fn process_job(state: &AppState, mut job: ProveJob) {
     let _ = state.accounts.update_prove_job(&job).await;
 
     // Step 2: Resolve prover backend from job.prover_type
+    // Two separate binaries: GNARK_PROVE_BINARY (CPU, no icicle) and GNARK_PROVE_GPU_BINARY (icicle-tagged)
+    // The icicle-tagged binary calls warmUpDevice() on NewProvingKey, which requires CUDA.
     let backend = match ProverType::from_db(&job.prover_type) {
         Some(ProverType::GnarkGpu) => {
-            let binary = std::env::var("GNARK_PROVE_BINARY").unwrap_or_else(|_| "gnark-prove".into());
+            let binary = std::env::var("GNARK_PROVE_GPU_BINARY")
+                .or_else(|_| std::env::var("GNARK_PROVE_BINARY"))
+                .unwrap_or_else(|_| "gnark-prove".into());
             let pk = std::env::var("GNARK_PK_PATH").unwrap_or_else(|_| "pk.bin".into());
             zkdcap_host::ProverBackend::Gnark { binary_path: binary, pk_path: pk, gpu: true }
         }
