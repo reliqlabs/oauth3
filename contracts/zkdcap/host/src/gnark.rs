@@ -1,90 +1,71 @@
 use anyhow::{bail, Context, Result};
 use serde_json::json;
-use std::path::Path;
+use std::io::{Read, Write};
 
 use crate::ProofOutput;
 
-/// Generate a Groth16 proof using the gnark Go binary as a subprocess.
+/// Generate a Groth16 proof via the gnark server over a unix socket.
 pub async fn generate_proof(
     quote: &[u8],
     pre_verified: &dcap_qvl::verify::PreVerifiedInputs,
     now_secs: u64,
-    binary_path: &str,
-    pk_path: &str,
-    gpu: bool,
+    socket_path: &str,
 ) -> Result<ProofOutput> {
-    // Verify binary and pk exist
-    if !Path::new(binary_path).exists() {
-        bail!("gnark prove binary not found: {binary_path}");
-    }
-    if !Path::new(pk_path).exists() {
-        bail!("gnark proving key not found: {pk_path}");
-    }
-
-    let tmp_dir = tempfile::tempdir().context("failed to create temp dir")?;
-    let quote_path = tmp_dir.path().join("quote.bin");
-    let pre_path = tmp_dir.path().join("pre_verified.json");
-    let out_path = tmp_dir.path().join("proof.json");
-
-    // Write quote binary
-    tokio::fs::write(&quote_path, quote)
-        .await
-        .context("failed to write quote.bin")?;
-
-    // Build Go-compatible PreVerifiedJSON (hex-encoded byte fields)
     let pre_json = build_pre_verified_json(pre_verified)?;
-    let pre_bytes = serde_json::to_vec_pretty(&pre_json).context("failed to serialize pre_verified")?;
-    tokio::fs::write(&pre_path, &pre_bytes)
-        .await
-        .context("failed to write pre_verified.json")?;
+    let request_body = json!({
+        "quote_hex": hex::encode(quote),
+        "pre_verified_json": pre_json,
+        "timestamp": now_secs,
+    });
+    let body_bytes = serde_json::to_vec(&request_body).context("failed to serialize request")?;
 
-    // Run gnark prove binary
-    tracing::info!(binary = %binary_path, gpu = gpu, "running gnark prove subprocess...");
-    let mut cmd = tokio::process::Command::new(binary_path);
-    cmd.arg("-quote").arg(&quote_path)
-        .arg("-pre").arg(&pre_path)
-        .arg("-timestamp").arg(now_secs.to_string())
-        .arg("-pk").arg(pk_path)
-        .arg("-out").arg(&out_path);
-    if gpu {
-        cmd.arg("-gpu");
-    }
-    let output = cmd.output()
-        .await
-        .context("failed to spawn gnark prove process")?;
+    let sock = socket_path.to_string();
+    let response_body = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+        let mut stream = std::os::unix::net::UnixStream::connect(&sock)
+            .with_context(|| format!("failed to connect to gnark server at {sock}"))?;
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(300)))
+            .ok();
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        bail!(
-            "gnark prove failed (exit {}): stderr={}, stdout={}",
-            output.status,
-            stderr.trim(),
-            stdout.trim()
+        // Send raw HTTP request
+        let request = format!(
+            "POST /prove HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body_bytes.len()
         );
+        stream.write_all(request.as_bytes())?;
+        stream.write_all(&body_bytes)?;
+        stream.flush()?;
+
+        // Read full response
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response)?;
+        Ok(response)
+    })
+    .await
+    .context("gnark prove task panicked")?
+    .context("gnark prove request failed")?;
+
+    // Parse HTTP response
+    let response_str = String::from_utf8_lossy(&response_body);
+    let body_start = response_str
+        .find("\r\n\r\n")
+        .map(|i| i + 4)
+        .unwrap_or(0);
+    let status_line = response_str.lines().next().unwrap_or("");
+
+    if !status_line.contains("200") {
+        let body = &response_str[body_start..];
+        bail!("gnark server returned {}: {}", status_line, body.trim());
     }
 
-    // Log subprocess output (contains per-step timing)
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        tracing::info!(target: "gnark", "{}", line);
-    }
-
-    // Parse output proof JSON
-    let proof_bytes = tokio::fs::read(&out_path)
-        .await
-        .context("failed to read proof.json output")?;
+    let body = &response_body[body_start..];
     let proof_value: serde_json::Value =
-        serde_json::from_slice(&proof_bytes).context("failed to parse proof.json")?;
-
-    // gnark outputs public_inputs as a nested object within the proof JSON;
-    // it's accessed directly from proof_value["public_inputs"] by the worker
-    let public_inputs = Vec::new();
+        serde_json::from_slice(body).context("failed to parse gnark proof response")?;
 
     Ok(ProofOutput {
         proof: proof_value,
-        public_inputs,
-        journal: String::new(), // gnark doesn't produce an SP1-style journal
+        public_inputs: Vec::new(),
+        journal: String::new(),
         zkvm: "gnark".to_string(),
     })
 }

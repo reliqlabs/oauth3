@@ -272,13 +272,69 @@
             echo "gnark: generating proving key (first run)..."
             "${gnarkBinaries}/bin/gnark-setup" -pk "$GNARK_DATA_DIR/pk.bin" -vk "$GNARK_DATA_DIR/vk.bin" && \
               echo "gnark: proving key generated" || \
-              echo "gnark: setup failed (gnark-cpu proving will be unavailable)"
+              echo "gnark: setup failed (gnark proving will be unavailable)"
           else
             echo "gnark: proving key found at $GNARK_DATA_DIR/pk.bin"
           fi
-          export GNARK_PROVE_BINARY="${gnarkBinaries}/bin/gnark-prove"
-          export GNARK_PROVE_GPU_BINARY="${gnarkProveIcicle}/bin/gnark-prove"
-          export GNARK_PK_PATH="$GNARK_DATA_DIR/pk.bin"
+
+          # Start gnark CPU prove server (caches circuit + pk in memory)
+          GNARK_CPU_SOCKET="''${GNARK_CPU_SOCKET:-/tmp/gnark-prove-cpu.sock}"
+          export GNARK_CPU_SOCKET
+          echo "gnark: starting CPU prove server..."
+          "${gnarkBinaries}/bin/gnark-prove" -server \
+            -pk "$GNARK_DATA_DIR/pk.bin" \
+            -socket "$GNARK_CPU_SOCKET" &
+          GNARK_CPU_PID=$!
+
+          # Start gnark GPU prove server if NVIDIA devices present
+          if ls /dev/nvidia* >/dev/null 2>&1; then
+            GNARK_GPU_SOCKET="''${GNARK_GPU_SOCKET:-/tmp/gnark-prove-gpu.sock}"
+            export GNARK_GPU_SOCKET
+            echo "gnark: starting GPU prove server..."
+            "${gnarkProveIcicle}/bin/gnark-prove" -server -gpu \
+              -pk "$GNARK_DATA_DIR/pk.bin" \
+              -socket "$GNARK_GPU_SOCKET" &
+            GNARK_GPU_PID=$!
+          fi
+
+          # Wait for CPU server to be ready (up to 120s for pk load)
+          echo "gnark: waiting for CPU server..."
+          for i in $(seq 1 120); do
+            if ${pkgs.curl}/bin/curl -s --unix-socket "$GNARK_CPU_SOCKET" http://localhost/healthz >/dev/null 2>&1; then
+              echo "gnark: CPU server ready (''${i}s)"
+              break
+            fi
+            if ! kill -0 $GNARK_CPU_PID 2>/dev/null; then
+              echo "gnark: CPU server process died"
+              break
+            fi
+            sleep 1
+          done
+
+          # Wait for GPU server if started
+          if [ -n "''${GNARK_GPU_PID:-}" ]; then
+            echo "gnark: waiting for GPU server..."
+            for i in $(seq 1 120); do
+              if ${pkgs.curl}/bin/curl -s --unix-socket "$GNARK_GPU_SOCKET" http://localhost/healthz >/dev/null 2>&1; then
+                echo "gnark: GPU server ready (''${i}s)"
+                break
+              fi
+              if ! kill -0 $GNARK_GPU_PID 2>/dev/null; then
+                echo "gnark: GPU server process died"
+                break
+              fi
+              sleep 1
+            done
+          fi
+
+          # Cleanup on exit
+          cleanup() {
+            echo "gnark: stopping servers..."
+            kill $GNARK_CPU_PID 2>/dev/null || true
+            [ -n "''${GNARK_GPU_PID:-}" ] && kill $GNARK_GPU_PID 2>/dev/null || true
+            wait
+          }
+          trap cleanup EXIT
 
           exec "${oauth3}/bin/oauth3"
         '';
@@ -301,6 +357,7 @@
             coreutils
             gnutar
             gzip
+            curl
             # glibc + libstdc++ needed at runtime for sp1-gpu-server (patched by autoPatchelfHook)
             stdenv.cc.cc.lib
           ];

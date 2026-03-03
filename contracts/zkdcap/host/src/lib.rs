@@ -18,10 +18,9 @@ pub struct ProofOutput {
 pub enum ProverBackend {
     /// SP1 Groth16 (CPU/GPU/Network selected by SP1_PROVER env at startup)
     Sp1,
-    /// gnark Go binary subprocess
+    /// gnark server over unix socket
     Gnark {
-        binary_path: String,
-        pk_path: String,
+        socket_path: String,
         gpu: bool,
     },
 }
@@ -55,12 +54,11 @@ pub async fn prove_quote(quote: &[u8], backend: &ProverBackend) -> Result<ProofO
             sp1::generate_proof(quote, &pre_verified, now_secs).await
         }
         ProverBackend::Gnark {
-            binary_path,
-            pk_path,
+            socket_path,
             gpu,
         } => {
             tracing::info!(gpu = gpu, "prove_quote: dispatching to gnark backend");
-            gnark::generate_proof(quote, &pre_verified, now_secs, binary_path, pk_path, *gpu).await
+            gnark::generate_proof(quote, &pre_verified, now_secs, socket_path).await
         }
     }
 }

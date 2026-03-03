@@ -2,52 +2,216 @@ package main
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"math/big"
+	"net"
+	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend"
 	"github.com/consensys/gnark/backend/groth16"
+	"github.com/consensys/gnark/constraint"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
+	"github.com/consensys/gnark/frontend/schema"
 
 	"github.com/reliqlabs/oauth3/circuits/dcap-gnark/circuit"
 	"github.com/reliqlabs/oauth3/circuits/dcap-gnark/witness"
 )
 
-func main() {
-	quotePath := flag.String("quote", "", "path to quote.bin")
-	prePath := flag.String("pre", "", "path to pre_verified.json")
-	tsStr := flag.String("timestamp", "", "verification timestamp (unix seconds)")
-	pkPath := flag.String("pk", "pk.bin", "proving key path")
-	outPath := flag.String("out", "proof.json", "output proof path")
-	gpuFlag := flag.Bool("gpu", false, "enable icicle GPU acceleration")
-	flag.Parse()
+// Prover holds cached circuit, proving key, and options for reuse across requests.
+type Prover struct {
+	ccs       constraint.ConstraintSystem
+	pk        groth16.ProvingKey
+	proveOpts []backend.ProverOption
+	schema    *schema.Schema
+}
 
-	if *quotePath == "" || *prePath == "" || *tsStr == "" {
-		fmt.Fprintln(os.Stderr, "usage: prove -quote <file> -pre <file> -timestamp <unix> [-pk pk.bin] [-out proof.json]")
-		os.Exit(1)
-	}
+func initProver(pkPath string, gpu bool) *Prover {
+	t0 := time.Now()
 
-	ts, err := strconv.ParseUint(*tsStr, 10, 64)
+	fmt.Println("Compiling circuit...")
+	tStep := time.Now()
+	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit.DcapCircuit{})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "invalid timestamp: %v\n", err)
+		fmt.Fprintf(os.Stderr, "compile: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Circuit compiled in %v (%d constraints)\n", time.Since(tStep), ccs.GetNbConstraints())
+
+	fmt.Println("Loading proving key...")
+	tStep = time.Now()
+	fpk, err := os.Open(pkPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "open pk: %v\n", err)
+		os.Exit(1)
+	}
+	pk := groth16.NewProvingKey(ecc.BN254)
+	if _, err := pk.ReadFrom(fpk); err != nil {
+		fpk.Close()
+		fmt.Fprintf(os.Stderr, "read pk: %v\n", err)
+		os.Exit(1)
+	}
+	fpk.Close()
+	fmt.Printf("Proving key loaded in %v\n", time.Since(tStep))
+
+	schema, err := frontend.NewSchema(ecc.BN254.ScalarField(), &circuit.DcapCircuit{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create schema: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Read inputs
-	quoteBytes, err := os.ReadFile(*quotePath)
+	var proveOpts []backend.ProverOption
+	if gpu {
+		fmt.Println("GPU acceleration enabled (icicle)")
+		proveOpts = append(proveOpts, backend.WithIcicleAcceleration())
+	}
+
+	fmt.Printf("Prover initialized in %v\n", time.Since(t0))
+	return &Prover{ccs: ccs, pk: pk, proveOpts: proveOpts, schema: schema}
+}
+
+// proveRequest is the JSON body for POST /prove.
+type proveRequest struct {
+	QuoteHex        string                   `json:"quote_hex"`
+	PreVerifiedJSON witness.PreVerifiedJSON  `json:"pre_verified_json"`
+	Timestamp       uint64                   `json:"timestamp"`
+}
+
+func (p *Prover) handleProve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read body: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	var req proveRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, fmt.Sprintf("parse request: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	quoteBytes, err := hex.DecodeString(req.QuoteHex)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("decode quote_hex: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	preVerified, err := req.PreVerifiedJSON.ToPreVerifiedInputs()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("convert pre_verified: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	t0 := time.Now()
+
+	assignment, err := witness.BuildWitness(quoteBytes, preVerified, req.Timestamp)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("build witness: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	wit, err := frontend.NewWitness(assignment, ecc.BN254.ScalarField())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("create witness: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	proof, err := groth16.Prove(p.ccs, p.pk, wit, p.proveOpts...)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("prove: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	elapsed := time.Since(t0)
+
+	pubWitness, err := wit.Public()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("extract public witness: %v", err), http.StatusInternalServerError)
+		return
+	}
+	pubJSON, err := pubWitness.ToJSON(p.schema)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("marshal public witness: %v", err), http.StatusInternalServerError)
+		return
+	}
+	var publicInputs map[string]interface{}
+	if err := json.Unmarshal(pubJSON, &publicInputs); err != nil {
+		http.Error(w, fmt.Sprintf("parse public witness JSON: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	snarkProof, err := proofToSnarkJS(proof)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("convert proof: %v", err), http.StatusInternalServerError)
+		return
+	}
+	snarkProof["public_inputs"] = publicInputs
+
+	fmt.Printf("Proved in %v\n", elapsed)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(snarkProof)
+}
+
+func runServer(prover *Prover, socketPath string) {
+	// Remove stale socket
+	os.Remove(socketPath)
+
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "listen %s: %v\n", socketPath, err)
+		os.Exit(1)
+	}
+	// Make socket world-accessible
+	os.Chmod(socketPath, 0666)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/prove", prover.handleProve)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+
+	// Graceful shutdown on SIGTERM/SIGINT
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-sig
+		fmt.Println("Shutting down gnark server...")
+		listener.Close()
+		os.Remove(socketPath)
+		os.Exit(0)
+	}()
+
+	fmt.Printf("gnark server listening on %s\n", socketPath)
+	if err := http.Serve(listener, mux); err != nil {
+		fmt.Fprintf(os.Stderr, "serve: %v\n", err)
+	}
+}
+
+func runCLI(prover *Prover, quotePath, prePath string, ts uint64, outPath string) {
+	quoteBytes, err := os.ReadFile(quotePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "read quote: %v\n", err)
 		os.Exit(1)
 	}
 
-	preBytes, err := os.ReadFile(*prePath)
+	preBytes, err := os.ReadFile(prePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "read pre_verified: %v\n", err)
 		os.Exit(1)
@@ -64,7 +228,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Build witness
 	fmt.Println("Building witness...")
 	tStep := time.Now()
 	assignment, err := witness.BuildWitness(quoteBytes, preVerified, ts)
@@ -74,17 +237,6 @@ func main() {
 	}
 	fmt.Printf("Witness built in %v\n", time.Since(tStep))
 
-	// Compile circuit (needed for witness creation)
-	fmt.Println("Compiling circuit...")
-	tStep = time.Now()
-	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit.DcapCircuit{})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "compile: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Circuit compiled in %v (%d constraints)\n", time.Since(tStep), ccs.GetNbConstraints())
-
-	// Create witness
 	tStep = time.Now()
 	w, err := frontend.NewWitness(assignment, ecc.BN254.ScalarField())
 	if err != nil {
@@ -93,50 +245,21 @@ func main() {
 	}
 	fmt.Printf("Witness created in %v\n", time.Since(tStep))
 
-	// Load proving key
-	fmt.Println("Loading proving key...")
-	tStep = time.Now()
-	fpk, err := os.Open(*pkPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "open pk: %v\n", err)
-		os.Exit(1)
-	}
-	defer fpk.Close()
-
-	pk := groth16.NewProvingKey(ecc.BN254)
-	if _, err := pk.ReadFrom(fpk); err != nil {
-		fmt.Fprintf(os.Stderr, "read pk: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Proving key loaded in %v\n", time.Since(tStep))
-
-	// Prove
-	var proveOpts []backend.ProverOption
-	if *gpuFlag {
-		fmt.Println("GPU acceleration enabled (icicle)")
-		proveOpts = append(proveOpts, backend.WithIcicleAcceleration())
-	}
 	fmt.Println("Proving...")
 	t0 := time.Now()
-	proof, err := groth16.Prove(ccs, pk, w, proveOpts...)
+	proof, err := groth16.Prove(prover.ccs, prover.pk, w, prover.proveOpts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "prove: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("Proved in %v\n", time.Since(t0))
 
-	// Extract public witness
 	pubWitness, err := w.Public()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "extract public witness: %v\n", err)
 		os.Exit(1)
 	}
-	schema, err := frontend.NewSchema(ecc.BN254.ScalarField(), &circuit.DcapCircuit{})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "create schema: %v\n", err)
-		os.Exit(1)
-	}
-	pubJSON, err := pubWitness.ToJSON(schema)
+	pubJSON, err := pubWitness.ToJSON(prover.schema)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "marshal public witness: %v\n", err)
 		os.Exit(1)
@@ -147,7 +270,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Convert to SnarkJS-compatible format
 	snarkProof, err := proofToSnarkJS(proof)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "convert proof: %v\n", err)
@@ -161,11 +283,45 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := os.WriteFile(*outPath, outJSON, 0644); err != nil {
+	if err := os.WriteFile(outPath, outJSON, 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "write proof: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Proof written to %s\n", *outPath)
+	fmt.Printf("Proof written to %s\n", outPath)
+}
+
+func main() {
+	quotePath := flag.String("quote", "", "path to quote.bin")
+	prePath := flag.String("pre", "", "path to pre_verified.json")
+	tsStr := flag.String("timestamp", "", "verification timestamp (unix seconds)")
+	pkPath := flag.String("pk", "pk.bin", "proving key path")
+	outPath := flag.String("out", "proof.json", "output proof path")
+	gpuFlag := flag.Bool("gpu", false, "enable icicle GPU acceleration")
+	serverFlag := flag.Bool("server", false, "run as HTTP server on unix socket")
+	socketPath := flag.String("socket", "/tmp/gnark-prove.sock", "unix socket path (server mode)")
+	flag.Parse()
+
+	if *serverFlag {
+		prover := initProver(*pkPath, *gpuFlag)
+		runServer(prover, *socketPath)
+		return
+	}
+
+	// CLI mode
+	if *quotePath == "" || *prePath == "" || *tsStr == "" {
+		fmt.Fprintln(os.Stderr, "usage: prove -quote <file> -pre <file> -timestamp <unix> [-pk pk.bin] [-out proof.json]")
+		fmt.Fprintln(os.Stderr, "       prove -server [-pk pk.bin] [-socket /tmp/gnark-prove.sock] [-gpu]")
+		os.Exit(1)
+	}
+
+	ts, err := strconv.ParseUint(*tsStr, 10, 64)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid timestamp: %v\n", err)
+		os.Exit(1)
+	}
+
+	prover := initProver(*pkPath, *gpuFlag)
+	runCLI(prover, *quotePath, *prePath, ts, *outPath)
 }
 
 // proofToSnarkJS converts a gnark Groth16 proof to SnarkJS-compatible JSON.
