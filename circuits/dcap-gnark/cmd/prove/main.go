@@ -66,29 +66,36 @@ func main() {
 
 	// Build witness
 	fmt.Println("Building witness...")
+	tStep := time.Now()
 	assignment, err := witness.BuildWitness(quoteBytes, preVerified, ts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build witness: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Printf("Witness built in %v\n", time.Since(tStep))
 
 	// Compile circuit (needed for witness creation)
 	fmt.Println("Compiling circuit...")
+	tStep = time.Now()
 	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit.DcapCircuit{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "compile: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Printf("Circuit compiled in %v (%d constraints)\n", time.Since(tStep), ccs.GetNbConstraints())
 
 	// Create witness
+	tStep = time.Now()
 	w, err := frontend.NewWitness(assignment, ecc.BN254.ScalarField())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create witness: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Printf("Witness created in %v\n", time.Since(tStep))
 
 	// Load proving key
 	fmt.Println("Loading proving key...")
+	tStep = time.Now()
 	fpk, err := os.Open(*pkPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "open pk: %v\n", err)
@@ -101,6 +108,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "read pk: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Printf("Proving key loaded in %v\n", time.Since(tStep))
 
 	// Prove
 	var proveOpts []backend.ProverOption

@@ -64,6 +64,12 @@ pub async fn generate_proof(
         );
     }
 
+    // Log subprocess output (contains per-step timing)
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        tracing::info!(target: "gnark", "{}", line);
+    }
+
     // Parse output proof JSON
     let proof_bytes = tokio::fs::read(&out_path)
         .await
