@@ -22,6 +22,7 @@ pub enum ProverBackend {
     Gnark {
         binary_path: String,
         pk_path: String,
+        gpu: bool,
     },
 }
 
@@ -56,9 +57,10 @@ pub async fn prove_quote(quote: &[u8], backend: &ProverBackend) -> Result<ProofO
         ProverBackend::Gnark {
             binary_path,
             pk_path,
+            gpu,
         } => {
-            tracing::info!("prove_quote: dispatching to gnark backend");
-            gnark::generate_proof(quote, &pre_verified, now_secs, binary_path, pk_path).await
+            tracing::info!(gpu = gpu, "prove_quote: dispatching to gnark backend");
+            gnark::generate_proof(quote, &pre_verified, now_secs, binary_path, pk_path, *gpu).await
         }
     }
 }

@@ -11,6 +11,7 @@ pub async fn generate_proof(
     now_secs: u64,
     binary_path: &str,
     pk_path: &str,
+    gpu: bool,
 ) -> Result<ProofOutput> {
     // Verify binary and pk exist
     if !Path::new(binary_path).exists() {
@@ -38,19 +39,17 @@ pub async fn generate_proof(
         .context("failed to write pre_verified.json")?;
 
     // Run gnark prove binary
-    tracing::info!(binary = %binary_path, "running gnark prove subprocess...");
-    let output = tokio::process::Command::new(binary_path)
-        .arg("-quote")
-        .arg(&quote_path)
-        .arg("-pre")
-        .arg(&pre_path)
-        .arg("-timestamp")
-        .arg(now_secs.to_string())
-        .arg("-pk")
-        .arg(pk_path)
-        .arg("-out")
-        .arg(&out_path)
-        .output()
+    tracing::info!(binary = %binary_path, gpu = gpu, "running gnark prove subprocess...");
+    let mut cmd = tokio::process::Command::new(binary_path);
+    cmd.arg("-quote").arg(&quote_path)
+        .arg("-pre").arg(&pre_path)
+        .arg("-timestamp").arg(now_secs.to_string())
+        .arg("-pk").arg(pk_path)
+        .arg("-out").arg(&out_path);
+    if gpu {
+        cmd.arg("-gpu");
+    }
+    let output = cmd.output()
         .await
         .context("failed to spawn gnark prove process")?;
 

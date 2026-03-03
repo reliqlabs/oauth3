@@ -129,6 +129,86 @@
           '';
         };
 
+        # Icicle v3.2.2 — Go wrapper CGO header files (not vendored by `go mod vendor`)
+        icicleGnarkHeaders = pkgs.fetchFromGitHub {
+          owner = "ingonyama-zk";
+          repo = "icicle-gnark";
+          rev = "v3.2.2";
+          hash = "sha256-kbXwg1cF72flzpl1+20D+smYKgl7Aslbf1KSCi6ur34=";
+        };
+
+        # Icicle v3.2.0 — core shared libs (CPU) for CGO linking + runtime
+        icicleCoreLibs = pkgs.stdenv.mkDerivation {
+          name = "icicle-core-libs-3.2.0";
+          dontUnpack = true;
+          nativeBuildInputs = [ pkgs.gnutar pkgs.gzip pkgs.autoPatchelfHook ];
+          buildInputs = [ pkgs.stdenv.cc.cc.lib ];
+          installPhase = ''
+            mkdir -p $out
+            tar -xzf ${pkgs.fetchurl {
+              url = "https://github.com/ingonyama-zk/icicle/releases/download/v3.2.0/icicle_3_2_0-ubuntu22.tar.gz";
+              hash = "sha256-dJRf72/qlMr6KfNdnVq6+DEif3O3t4LCMc33fs2sgfs=";
+            }} -C $out
+          '';
+        };
+
+        # Icicle v3.2.0 — CUDA backend plugins for GPU proving (loaded at runtime via dlopen)
+        icicleCudaBackend = pkgs.stdenv.mkDerivation {
+          name = "icicle-cuda-backend-3.2.0";
+          dontUnpack = true;
+          nativeBuildInputs = [ pkgs.gnutar pkgs.gzip pkgs.autoPatchelfHook ];
+          buildInputs = [
+            pkgs.stdenv.cc.cc.lib
+            pkgs.cudaPackages.cuda_cudart.lib
+            icicleCoreLibs # CUDA plugins link against core icicle libs
+          ];
+          autoPatchelfIgnoreMissingDeps = [ "libcuda.so.*" "libnvidia-ml.so.*" ];
+          installPhase = ''
+            mkdir -p $out/icicle/lib
+            tar -xzf ${pkgs.fetchurl {
+              url = "https://github.com/ingonyama-zk/icicle/releases/download/v3.2.0/icicle_3_2_0-ubuntu22-cuda122.tar.gz";
+              hash = "sha256-JH8LgXGae7jMK8IkPjYrBeVBOSxRfMKO3tOss7JUmMg=";
+            }} -C $out --strip-components=0 "icicle/lib/backend"
+          '';
+        };
+
+        # Icicle-enabled gnark prove binary (supports CPU fallback + GPU with -gpu flag).
+        # Setup binary stays in gnarkBinaries (no icicle) to avoid CUDA device init on boot.
+        gnarkProveIcicle = pkgs.buildGoModule {
+          pname = "gnark-dcap-icicle";
+          version = "0.1.0";
+          src = gnarkSrc;
+          vendorHash = null;
+          subPackages = [ "cmd/prove" ];
+          tags = [ "icicle" ];
+          nativeBuildInputs = [ pkgs.autoPatchelfHook ];
+          buildInputs = [ icicleCoreLibs pkgs.stdenv.cc.cc.lib ];
+          CGO_LDFLAGS = "-L${icicleCoreLibs}/icicle/lib";
+          preBuild = ''
+            # Copy icicle-gnark Go wrapper CGO headers into vendor tree.
+            # go mod vendor doesn't copy .h files from include/ subdirectories
+            # because they don't contain .go files.
+            local vendorBase="vendor/github.com/ingonyama-zk/icicle-gnark/v3/wrappers/golang"
+            local srcBase="${icicleGnarkHeaders}/wrappers/golang"
+            for reldir in \
+              runtime \
+              runtime/config_extension \
+              curves/bn254 \
+              curves/bn254/g2 \
+              curves/bn254/msm \
+              curves/bn254/ntt \
+              curves/bn254/vecOps; do
+              if [ -d "$srcBase/$reldir/include" ]; then
+                mkdir -p "$vendorBase/$reldir/include"
+                cp "$srcBase/$reldir/include/"*.h "$vendorBase/$reldir/include/"
+              fi
+            done
+          '';
+          postInstall = ''
+            mv $out/bin/prove $out/bin/gnark-prove
+          '';
+        };
+
         # SP1 CUDA proving artifacts (x86_64-linux only, bundled into Docker image)
         sp1GpuServerTarball = pkgs.fetchurl {
           url = "https://github.com/succinctlabs/sp1/releases/download/v6.0.2/sp1_gpu_server_v6.0.2_x86_64.tar.gz";
@@ -191,7 +271,7 @@
           else
             echo "gnark: proving key found at $GNARK_DATA_DIR/pk.bin"
           fi
-          export GNARK_PROVE_BINARY="${gnarkBinaries}/bin/gnark-prove"
+          export GNARK_PROVE_BINARY="${gnarkProveIcicle}/bin/gnark-prove"
           export GNARK_PK_PATH="$GNARK_DATA_DIR/pk.bin"
 
           exec "${oauth3}/bin/oauth3"
@@ -205,7 +285,10 @@
           contents = with pkgs; [
             oauth3
             gnarkBinaries
+            gnarkProveIcicle
             sp1Artifacts
+            icicleCoreLibs
+            icicleCudaBackend
             cacert
             postgresql
             bashInteractive
@@ -237,6 +320,8 @@
               "LD_LIBRARY_PATH=/usr/lib64:/usr/lib/x86_64-linux-gnu"
               # sp1-gpu-server requires CUDA_VISIBLE_DEVICES as a single numeric device ID
               "CUDA_VISIBLE_DEVICES=0"
+              # Icicle CUDA backend plugins for gnark GPU proving
+              "ICICLE_BACKEND_INSTALL_DIR=${icicleCudaBackend}/icicle/lib/backend"
             ];
             ExposedPorts = {
               "8080/tcp" = {};

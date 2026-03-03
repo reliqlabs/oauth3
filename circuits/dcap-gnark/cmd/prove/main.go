@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,9 +10,8 @@ import (
 	"strconv"
 	"time"
 
-	"bytes"
-
 	"github.com/consensys/gnark-crypto/ecc"
+	"github.com/consensys/gnark/backend"
 	"github.com/consensys/gnark/backend/groth16"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
@@ -26,6 +26,7 @@ func main() {
 	tsStr := flag.String("timestamp", "", "verification timestamp (unix seconds)")
 	pkPath := flag.String("pk", "pk.bin", "proving key path")
 	outPath := flag.String("out", "proof.json", "output proof path")
+	gpuFlag := flag.Bool("gpu", false, "enable icicle GPU acceleration")
 	flag.Parse()
 
 	if *quotePath == "" || *prePath == "" || *tsStr == "" {
@@ -102,9 +103,14 @@ func main() {
 	}
 
 	// Prove
+	var proveOpts []backend.ProverOption
+	if *gpuFlag {
+		fmt.Println("GPU acceleration enabled (icicle)")
+		proveOpts = append(proveOpts, backend.WithIcicleAcceleration())
+	}
 	fmt.Println("Proving...")
 	t0 := time.Now()
-	proof, err := groth16.Prove(ccs, pk, w)
+	proof, err := groth16.Prove(ccs, pk, w, proveOpts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "prove: %v\n", err)
 		os.Exit(1)

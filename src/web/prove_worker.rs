@@ -102,10 +102,15 @@ async fn process_job(state: &AppState, mut job: ProveJob) {
 
     // Step 2: Resolve prover backend from job.prover_type
     let backend = match ProverType::from_db(&job.prover_type) {
-        Some(ProverType::GnarkCpu | ProverType::GnarkGpu) => {
+        Some(ProverType::GnarkGpu) => {
             let binary = std::env::var("GNARK_PROVE_BINARY").unwrap_or_else(|_| "gnark-prove".into());
             let pk = std::env::var("GNARK_PK_PATH").unwrap_or_else(|_| "pk.bin".into());
-            zkdcap_host::ProverBackend::Gnark { binary_path: binary, pk_path: pk }
+            zkdcap_host::ProverBackend::Gnark { binary_path: binary, pk_path: pk, gpu: true }
+        }
+        Some(ProverType::GnarkCpu) => {
+            let binary = std::env::var("GNARK_PROVE_BINARY").unwrap_or_else(|_| "gnark-prove".into());
+            let pk = std::env::var("GNARK_PK_PATH").unwrap_or_else(|_| "pk.bin".into());
+            zkdcap_host::ProverBackend::Gnark { binary_path: binary, pk_path: pk, gpu: false }
         }
         _ => zkdcap_host::ProverBackend::Sp1,
     };
