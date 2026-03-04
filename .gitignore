@@ -45,6 +45,9 @@ cobertura.xml
 result/
 sqlite::memory:
 
+# Node.js
+node_modules/
+
 # Temporary files
 .tmp/
 *.tmp

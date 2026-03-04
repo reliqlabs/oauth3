@@ -2,6 +2,8 @@
 /prove
 /setup
 /verify
+/verify-remote
+/export-vkey
 /gen-fixture
 
 # Proving artifacts

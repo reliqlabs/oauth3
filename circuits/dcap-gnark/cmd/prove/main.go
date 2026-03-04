@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -17,8 +16,12 @@ import (
 	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
+	"github.com/consensys/gnark-crypto/ecc/bn254"
+	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
+	"github.com/consensys/gnark-crypto/ecc/bn254/fr/hash_to_field"
 	"github.com/consensys/gnark/backend"
 	"github.com/consensys/gnark/backend/groth16"
+	groth16_bn254 "github.com/consensys/gnark/backend/groth16/bn254"
 	"github.com/consensys/gnark/constraint"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
@@ -28,15 +31,16 @@ import (
 	"github.com/reliqlabs/oauth3/circuits/dcap-gnark/witness"
 )
 
-// Prover holds cached circuit, proving key, and options for reuse across requests.
+// Prover holds cached circuit, proving key, verifying key, and options for reuse across requests.
 type Prover struct {
 	ccs       constraint.ConstraintSystem
 	pk        groth16.ProvingKey
+	vk        *groth16_bn254.VerifyingKey // for commitment hash computation
 	proveOpts []backend.ProverOption
 	schema    *schema.Schema
 }
 
-func initProver(pkPath string, gpu bool) *Prover {
+func initProver(pkPath, vkPath string, gpu bool) *Prover {
 	t0 := time.Now()
 
 	fmt.Println("Compiling circuit...")
@@ -64,7 +68,29 @@ func initProver(pkPath string, gpu bool) *Prover {
 	fpk.Close()
 	fmt.Printf("Proving key loaded in %v\n", time.Since(tStep))
 
-	schema, err := frontend.NewSchema(ecc.BN254.ScalarField(), &circuit.DcapCircuit{})
+	// Load verifying key (needed for commitment hash computation)
+	var vkBn254 *groth16_bn254.VerifyingKey
+	if vkPath != "" {
+		fmt.Println("Loading verifying key...")
+		tStep = time.Now()
+		fvk, err := os.Open(vkPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "open vk: %v\n", err)
+			os.Exit(1)
+		}
+		vk := groth16.NewVerifyingKey(ecc.BN254)
+		if _, err := vk.ReadFrom(fvk); err != nil {
+			fvk.Close()
+			fmt.Fprintf(os.Stderr, "read vk: %v\n", err)
+			os.Exit(1)
+		}
+		fvk.Close()
+		vkBn254 = vk.(*groth16_bn254.VerifyingKey)
+		fmt.Printf("Verifying key loaded in %v (commitments: %d, IC: %d)\n",
+			time.Since(tStep), len(vkBn254.PublicAndCommitmentCommitted), len(vkBn254.G1.K))
+	}
+
+	s, err := frontend.NewSchema(ecc.BN254.ScalarField(), &circuit.DcapCircuit{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create schema: %v\n", err)
 		os.Exit(1)
@@ -77,14 +103,14 @@ func initProver(pkPath string, gpu bool) *Prover {
 	}
 
 	fmt.Printf("Prover initialized in %v\n", time.Since(t0))
-	return &Prover{ccs: ccs, pk: pk, proveOpts: proveOpts, schema: schema}
+	return &Prover{ccs: ccs, pk: pk, vk: vkBn254, proveOpts: proveOpts, schema: s}
 }
 
 // proveRequest is the JSON body for POST /prove.
 type proveRequest struct {
-	QuoteHex        string                   `json:"quote_hex"`
-	PreVerifiedJSON witness.PreVerifiedJSON  `json:"pre_verified_json"`
-	Timestamp       uint64                   `json:"timestamp"`
+	QuoteHex        string                  `json:"quote_hex"`
+	PreVerifiedJSON witness.PreVerifiedJSON `json:"pre_verified_json"`
+	Timestamp       uint64                  `json:"timestamp"`
 }
 
 func (p *Prover) handleProve(w http.ResponseWriter, r *http.Request) {
@@ -155,12 +181,19 @@ func (p *Prover) handleProve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snarkProof, err := proofToSnarkJS(proof)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("convert proof: %v", err), http.StatusInternalServerError)
-		return
-	}
+	snarkProof := proofToSnarkJS(proof)
 	snarkProof["public_inputs"] = publicInputs
+
+	// Compute flat public_signals array (including commitment hashes)
+	if p.vk != nil {
+		pubVec := pubWitness.Vector().(fr.Vector)
+		signals, err := computePublicSignals(proof, p.vk, pubVec)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("compute public signals: %v", err), http.StatusInternalServerError)
+			return
+		}
+		snarkProof["public_signals"] = signals
+	}
 
 	fmt.Printf("Proved in %v\n", elapsed)
 
@@ -276,12 +309,19 @@ func runCLI(prover *Prover, quotePath, prePath string, ts uint64, outPath string
 		os.Exit(1)
 	}
 
-	snarkProof, err := proofToSnarkJS(proof)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "convert proof: %v\n", err)
-		os.Exit(1)
-	}
+	snarkProof := proofToSnarkJS(proof)
 	snarkProof["public_inputs"] = publicInputs
+
+	// Compute flat public_signals array (including commitment hashes)
+	if prover.vk != nil {
+		pubVec := pubWitness.Vector().(fr.Vector)
+		signals, err := computePublicSignals(proof, prover.vk, pubVec)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "compute public signals: %v\n", err)
+			os.Exit(1)
+		}
+		snarkProof["public_signals"] = signals
+	}
 
 	outJSON, err := json.MarshalIndent(snarkProof, "", "  ")
 	if err != nil {
@@ -301,6 +341,7 @@ func main() {
 	prePath := flag.String("pre", "", "path to pre_verified.json")
 	tsStr := flag.String("timestamp", "", "verification timestamp (unix seconds)")
 	pkPath := flag.String("pk", "pk.bin", "proving key path")
+	vkPath := flag.String("vk", "", "verifying key path (enables public_signals output)")
 	outPath := flag.String("out", "proof.json", "output proof path")
 	gpuFlag := flag.Bool("gpu", false, "enable icicle GPU acceleration")
 	serverFlag := flag.Bool("server", false, "run as HTTP server on unix socket")
@@ -308,15 +349,15 @@ func main() {
 	flag.Parse()
 
 	if *serverFlag {
-		prover := initProver(*pkPath, *gpuFlag)
+		prover := initProver(*pkPath, *vkPath, *gpuFlag)
 		runServer(prover, *socketPath)
 		return
 	}
 
 	// CLI mode
 	if *quotePath == "" || *prePath == "" || *tsStr == "" {
-		fmt.Fprintln(os.Stderr, "usage: prove -quote <file> -pre <file> -timestamp <unix> [-pk pk.bin] [-out proof.json]")
-		fmt.Fprintln(os.Stderr, "       prove -server [-pk pk.bin] [-socket /tmp/gnark-prove.sock] [-gpu]")
+		fmt.Fprintln(os.Stderr, "usage: prove -quote <file> -pre <file> -timestamp <unix> [-pk pk.bin] [-vk vk.bin] [-out proof.json]")
+		fmt.Fprintln(os.Stderr, "       prove -server [-pk pk.bin] [-vk vk.bin] [-socket /tmp/gnark-prove.sock] [-gpu]")
 		os.Exit(1)
 	}
 
@@ -326,41 +367,110 @@ func main() {
 		os.Exit(1)
 	}
 
-	prover := initProver(*pkPath, *gpuFlag)
+	prover := initProver(*pkPath, *vkPath, *gpuFlag)
 	runCLI(prover, *quotePath, *prePath, ts, *outPath)
 }
 
+// g1ToDecimal converts a BN254 G1 affine point to [x, y, "1"] decimal strings.
+func g1ToDecimal(p *bn254.G1Affine) []string {
+	x := new(big.Int)
+	y := new(big.Int)
+	p.X.BigInt(x)
+	p.Y.BigInt(y)
+	return []string{x.String(), y.String(), "1"}
+}
+
 // proofToSnarkJS converts a gnark Groth16 proof to SnarkJS-compatible JSON.
-// Uses WriteRawTo (uncompressed points: Ar(64B) + Bs(128B) + Krs(64B) = 256B).
-func proofToSnarkJS(proof groth16.Proof) (map[string]interface{}, error) {
-	var buf bytes.Buffer
-	if _, err := proof.WriteRawTo(&buf); err != nil {
-		return nil, fmt.Errorf("write raw proof: %w", err)
-	}
+// Uses concrete BN254 types for reliable field extraction.
+func proofToSnarkJS(proof groth16.Proof) map[string]interface{} {
+	p := proof.(*groth16_bn254.Proof)
 
-	raw := buf.Bytes()
-	// gnark WriteRawTo for BN254 groth16:
-	// Ar: G1 uncompressed (64 bytes: X 32B + Y 32B)
-	// Bs: G2 uncompressed (128 bytes: X.A0 32B + X.A1 32B + Y.A0 32B + Y.A1 32B)
-	// Krs: G1 uncompressed (64 bytes)
-	// Total: 256 bytes
-	if len(raw) < 256 {
-		return nil, fmt.Errorf("proof too short: %d bytes", len(raw))
-	}
-
-	toDecimal := func(b []byte) string {
-		return new(big.Int).SetBytes(b).String()
-	}
-
-	return map[string]interface{}{
-		"pi_a": []string{toDecimal(raw[0:32]), toDecimal(raw[32:64]), "1"},
-		"pi_b": [][]string{
-			{toDecimal(raw[64:96]), toDecimal(raw[96:128])},    // [A0(real), A1(imag)]
-			{toDecimal(raw[128:160]), toDecimal(raw[160:192])},
+	// G2 point extraction
+	g2ToDecimal := func(pt *bn254.G2Affine) [][]string {
+		x0 := new(big.Int)
+		x1 := new(big.Int)
+		y0 := new(big.Int)
+		y1 := new(big.Int)
+		pt.X.A0.BigInt(x0)
+		pt.X.A1.BigInt(x1)
+		pt.Y.A0.BigInt(y0)
+		pt.Y.A1.BigInt(y1)
+		return [][]string{
+			{x0.String(), x1.String()},
+			{y0.String(), y1.String()},
 			{"1", "0"},
-		},
-		"pi_c":     []string{toDecimal(raw[192:224]), toDecimal(raw[224:256]), "1"},
+		}
+	}
+
+	result := map[string]interface{}{
+		"pi_a":     g1ToDecimal(&p.Ar),
+		"pi_b":     g2ToDecimal(&p.Bs),
+		"pi_c":     g1ToDecimal(&p.Krs),
 		"protocol": "groth16",
 		"curve":    "bn128",
-	}, nil
+	}
+
+	// Include Pedersen commitment data if present
+	if len(p.Commitments) > 0 {
+		comms := make([][]string, len(p.Commitments))
+		for i := range p.Commitments {
+			comms[i] = g1ToDecimal(&p.Commitments[i])
+		}
+		result["commitments"] = comms
+		result["commitment_pok"] = g1ToDecimal(&p.CommitmentPok)
+	}
+
+	return result
+}
+
+// computePublicSignals produces the flat decimal-string public signals array,
+// replicating gnark's verify.go commitment hash computation (lines 77-94).
+// Output order: [circuit_public_inputs..., commitment_hashes...]
+func computePublicSignals(proof groth16.Proof, vk *groth16_bn254.VerifyingKey, pubWitVec fr.Vector) ([]string, error) {
+	nCommitments := len(vk.PublicAndCommitmentCommitted)
+	signals := make([]string, 0, len(pubWitVec)+nCommitments)
+
+	// Circuit public inputs as decimal strings
+	for _, elem := range pubWitVec {
+		var bi big.Int
+		elem.BigInt(&bi)
+		signals = append(signals, bi.String())
+	}
+
+	if nCommitments == 0 {
+		return signals, nil
+	}
+
+	// Compute commitment hashes (replicates verify.go solveCommitmentWire)
+	proofBn254 := proof.(*groth16_bn254.Proof)
+
+	for i := range vk.PublicAndCommitmentCommitted {
+		if i >= len(proofBn254.Commitments) {
+			return nil, fmt.Errorf("proof has %d commitments, VK expects %d", len(proofBn254.Commitments), nCommitments)
+		}
+
+		// Serialize: commitment_G1_uncompressed || committed_public_values
+		commitBytes := proofBn254.Commitments[i].Marshal() // 64 bytes (uncompressed G1)
+		prehash := make([]byte, len(commitBytes)+len(vk.PublicAndCommitmentCommitted[i])*fr.Bytes)
+		copy(prehash, commitBytes)
+		offset := len(commitBytes)
+		for _, idx := range vk.PublicAndCommitmentCommitted[i] {
+			copy(prehash[offset:], pubWitVec[idx-1].Marshal()) // idx is 1-based (0=ONE wire)
+			offset += fr.Bytes
+		}
+
+		// Hash to field with domain "bsb22-commitment"
+		hFunc := hash_to_field.New([]byte("bsb22-commitment"))
+		hFunc.Write(prehash[:offset])
+		hashBts := hFunc.Sum(nil)
+
+		var res fr.Element
+		res.SetBytes(hashBts[:fr.Bytes])
+
+		var bi big.Int
+		res.BigInt(&bi)
+		signals = append(signals, bi.String())
+	}
+
+	return signals, nil
 }

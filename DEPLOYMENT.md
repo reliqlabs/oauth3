@@ -41,9 +41,11 @@ CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "16";
 
 ### The Core Problem: No Standard FHS
 
-Nix `dockerTools.buildLayeredImage` produces images with no `/usr/lib/`, `/usr/bin/`, etc. — everything lives in `/nix/store/`. This breaks nvidia-container-toolkit.
+Nix `dockerTools.buildLayeredImage` produces images with no `/usr/lib/`, `/usr/bin/`, etc. — everything lives in `/nix/store/`. This breaks nvidia-container-toolkit in two ways:
 
-**nvidia-container-toolkit** bind-mounts CUDA libraries into `/usr/lib/x86_64-linux-gnu/` (Debian hosts) or `/usr/lib64/` (Yocto/dstack hosts). If these directories don't exist in the image, the toolkit **silently skips the mount** — the container starts fine but has no GPU access. There are zero error messages. You'll spend hours wondering why `/dev/nvidia*` exists but CUDA doesn't work.
+1. **Silent mount failure** — nvidia-container-toolkit bind-mounts CUDA libraries into FHS paths (`/usr/lib/x86_64-linux-gnu/`, `/usr/lib64/`). If these directories don't exist, the toolkit **silently skips the mount**. The container starts fine but has no GPU access. Zero error messages.
+
+2. **Misdiagnosed errors** — Without the injected CUDA libs, GPU operations fail with vague errors like "operation not supported" from `cudaDeviceGetMemPool()`. This looks like NVIDIA Confidential Computing (CC) mode blocking CUDA, but the real root cause is the missing libraries. We spent significant time chasing a CC-mode red herring before Phala devrel identified this.
 
 Fix in `flake.nix`:
 
@@ -52,16 +54,50 @@ extraCommands = ''
   mkdir -p usr/lib/x86_64-linux-gnu
   mkdir -p usr/lib64
   mkdir -p usr/bin
+  mkdir -p usr/lib  # for manual mounts (see below)
 '';
 ```
 
+### Manual CUDA Library Mounts (The Real Fix)
+
+Even with FHS directories created, nvidia-container-runtime's automatic injection remains unreliable with Nix images. The proven fix from Phala devrel is to **manually mount the specific `.so` files** from the dstack VM host into the container.
+
+Required libraries (driver version `570.172.08` on current dstack-nvidia-dev):
+
+```yaml
+volumes:
+  # Core CUDA driver
+  - /usr/lib/libcuda.so.570.172.08:/usr/lib/libcuda.so.570.172.08:ro
+  - /usr/lib/libcuda.so.570.172.08:/usr/lib/libcuda.so.1:ro
+  # CC-mode security attestation (required for GPU in TEE)
+  - /usr/lib/libnvidia-pkcs11.so.570.172.08:/usr/lib/libnvidia-pkcs11.so.570.172.08:ro
+  - /usr/lib/libnvidia-pkcs11-openssl3.so.570.172.08:/usr/lib/libnvidia-pkcs11-openssl3.so.570.172.08:ro
+  # PTX JIT compiler (required for ZK proof generation)
+  - /usr/lib/libnvidia-ptxjitcompiler.so.570.172.08:/usr/lib/libnvidia-ptxjitcompiler.so.570.172.08:ro
+  - /usr/lib/libnvidia-ptxjitcompiler.so.570.172.08:/usr/lib/libnvidia-ptxjitcompiler.so.1:ro
+```
+
+The libraries break down into three categories:
+
+| Library | Purpose | Why needed |
+|---------|---------|------------|
+| `libcuda.so` | CUDA driver API | Core GPU access — nothing works without this |
+| `libnvidia-pkcs11*.so` | CC-mode attestation | GPU security handshake in TEE environments |
+| `libnvidia-ptxjitcompiler.so` | PTX JIT compiler | Compiles GPU kernels at runtime — ZK provers need this |
+
+The PTX JIT compiler was a key missing piece. Without it, CUDA initializes but kernel launches fail — which is exactly what ZK proving does.
+
 ### LD_LIBRARY_PATH
 
-Even with the directories created, binaries won't find the injected CUDA libs unless `LD_LIBRARY_PATH` includes them. Both paths are needed — dstack's Yocto host uses `/usr/lib64/`, Debian-based hosts use `/usr/lib/x86_64-linux-gnu/`:
+Binaries won't find CUDA libs unless `LD_LIBRARY_PATH` includes the mount paths. All three are needed:
 
 ```nix
-Env = [ "LD_LIBRARY_PATH=/usr/lib64:/usr/lib/x86_64-linux-gnu" ];
+Env = [ "LD_LIBRARY_PATH=/usr/lib64:/usr/lib/x86_64-linux-gnu:/usr/lib" ];
 ```
+
+- `/usr/lib64` — dstack Yocto host auto-injection path
+- `/usr/lib/x86_64-linux-gnu` — Debian host auto-injection path
+- `/usr/lib` — manual mount path (from compose volumes above)
 
 ### libcudart.so vs libcuda.so
 
@@ -69,8 +105,8 @@ These are different libraries with different sourcing:
 
 | Library | What | Source |
 |---------|------|--------|
-| `libcuda.so` | CUDA driver API | Injected by nvidia-container-toolkit from host |
-| `libnvidia-ml.so` | NVIDIA Management Library | Injected by nvidia-container-toolkit from host |
+| `libcuda.so` | CUDA driver API | Host (manual mount or nvidia-container-toolkit) |
+| `libnvidia-ml.so` | NVIDIA Management Library | Host (nvidia-container-toolkit) |
 | `libcudart.so` | CUDA runtime API | Must be bundled in the image |
 
 nvidia-container-toolkit only provides driver-level libraries. The CUDA runtime (`libcudart.so`) must be in the image. In Nix:
@@ -148,30 +184,36 @@ Download: `https://sp1-circuits.s3-us-east-2.amazonaws.com/v6.0.0-groth16.tar.gz
 
 ## NVIDIA Confidential Computing (CC) Mode
 
-**This is the single biggest blocker for GPU proving in TEE environments.**
-
-Phala dstack TEE nodes run NVIDIA GPUs in Confidential Computing mode. CC-mode disables several CUDA features to prevent GPU memory side-channel attacks:
+Phala dstack TEE nodes run NVIDIA GPUs in Confidential Computing mode. CC-mode restricts certain CUDA features:
 
 - `cudaDeviceGetMemPool()` — disabled (stream-ordered memory pools)
 - Unified memory — disabled or restricted
 - Peer-to-peer GPU access — disabled
 
-SP1 v6's GPU backend (`sp1-gpu-server`) unconditionally calls `cudaDeviceGetMemPool()` and panics when it returns "operation not supported". The error chain:
+### The Misdiagnosis
 
-```
-1. sp1-gpu-server starts, initializes CUDA device 0
-2. Calls cudaDeviceGetMemPool() for stream-ordered allocations
-3. CC-mode driver returns: "operation not supported"
-4. sp1-gpu-server panics at task.rs:192 — CudaRustError
-5. SP1 SDK reports: "Could not connect to sp1-gpu-server socket"
-```
+We initially believed CC-mode fundamentally blocked GPU proving. SP1's `sp1-gpu-server` was failing with `cudaDeviceGetMemPool()` → "operation not supported", which looked like a CC-mode restriction.
 
-There is no workaround from the application side. Options:
+**The actual root cause was different**: nvidia-container-runtime was silently failing to inject CUDA libraries into the Nix image (no FHS directories). Without `libcuda.so`, `libnvidia-pkcs11*.so`, and `libnvidia-ptxjitcompiler.so`, CUDA partially initializes but fails at operations that need the driver — producing errors that *look like* CC-mode restrictions but are actually missing library errors.
 
-1. **CPU prover** (`SP1_PROVER=cpu`) — ~7 min on 24 vCPU, ~16 min on 8-core arm64
-2. **SP1 Network Prover** (`SP1_PROVER=network`) — remote GPU, needs `NETWORK_PRIVATE_KEY` + funded account
-3. Non-CC GPU node (if the infrastructure offers one)
-4. Wait for SP1 to add CC-mode fallback
+### The Fix (from Phala devrel)
+
+Two changes resolved GPU proving in CC-mode TEE:
+
+1. **Manual library mounts** — Mount `libcuda.so`, `libnvidia-pkcs11*.so` (CC-mode attestation), and `libnvidia-ptxjitcompiler.so` (PTX JIT compiler) directly from the VM host into the container via compose volumes. See [Manual CUDA Library Mounts](#manual-cuda-library-mounts-the-real-fix) above.
+
+2. **dstack image upgrade to v0.5.6** — Resolves PTX JIT compiler compatibility issues on the host side.
+
+With both changes, GPU proving works in CC-mode TEE. The `cudaDeviceGetMemPool()` limitation may still apply to SP1's `sp1-gpu-server` (which uses stream-ordered memory pools), but gnark's icicle backend does not use that API and works correctly.
+
+### Current Status
+
+| Backend | CC-mode GPU | Notes |
+|---------|-------------|-------|
+| gnark-gpu (icicle) | Works | ~3-5s e2e with manual lib mounts |
+| SP1 GPU (sp1-gpu-server) | Blocked | Uses `cudaDeviceGetMemPool()` — genuinely unsupported in CC-mode |
+| SP1 CPU | Works | ~7 min on 24 vCPU |
+| SP1 Network | Works | Remote GPU, needs funded account |
 
 ## Phala Cloud (dstack)
 
@@ -206,19 +248,25 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+              count: all
+              capabilities: [gpu, compute, utility]
 ```
 
 dstack's Docker `daemon.json` registers the nvidia runtime but does NOT set it as default. Without explicit `runtime: nvidia` in compose, the container gets no GPU — silently.
 
+### Image Tag Caching
+
+`phala deploy` won't pull a new image if the tag name is unchanged. Use SHA-specific tags (e.g., `feat-contract-464823a`) to force pulls. CI generates `type=sha,prefix={{branch}}-` tags.
+
 ### Proxy Timeout
 
-Phala's reverse proxy has a ~7 minute connection timeout. Any synchronous HTTP request that takes longer will be killed. This is why proof generation uses an async job queue:
+Phala's reverse proxy has a ~7 minute connection timeout. Any synchronous HTTP request that takes longer will be killed. For slow provers (SP1 CPU), use the async job queue:
 
 1. `?prove=true` → HTTP 202 Accepted with `{ "job_id": "...", "poll_url": "/prove/<id>" }`
 2. Background worker processes the job (~7 min)
 3. Client polls `GET /prove/{job_id}` for status
+
+Fast provers (gnark-gpu, ~3-5s) can use `?prove=gnark-gpu-sync` for a synchronous inline response.
 
 ### dstack Socket for TEE Attestation
 
@@ -230,6 +278,25 @@ volumes:
 environment:
   DSTACK_SOCKET: /var/run/dstack.sock
 ```
+
+### dstack Base Image Versions
+
+| Version | Key change |
+|---------|-----------|
+| `dstack-nvidia-dev-0.5.4.1` | Initial GPU support |
+| `dstack-nvidia-dev-0.5.6` | PTX JIT compiler compatibility fix — **required for ZK proving** |
+
+Always use v0.5.6+ for GPU proof generation workloads.
+
+### Infrastructure
+
+| Node | Region | Specs | Type |
+|------|--------|-------|------|
+| prod5 | US-WEST-1 | 32 vCPU / 64GB | CPU |
+| prod9 | US-WEST-1 | 32 vCPU / 64GB | CPU |
+| gpu-use2 | US-EAST-1 | 24 vCPU / 192GB / 1x H200 141GB | GPU ($3.50/hr) |
+
+Container names inside dstack are `dstack-app-1` and `dstack-db-1` (not `app` or `db`).
 
 ## SP1 v6 Proof Format
 
@@ -256,7 +323,54 @@ gnark stores G2 coordinates as `[imaginary, real]` (A1 before A0), which is the 
 When GPU proving doesn't work in a new TEE deployment:
 
 1. **Are GPU devices visible?** `ls /dev/nvidia*` — if missing, check compose `runtime: nvidia`
-2. **Are CUDA libs mounted?** `ls /usr/lib64/libcuda*` and `ls /usr/lib/x86_64-linux-gnu/libcuda*` — if missing, the image lacks the mount-point directories
-3. **Can sp1-gpu-server start?** Run it manually with `--help` — if "not found", check autoPatchelfHook
-4. **Does CUDA init work?** Run sp1-gpu-server and check stderr — if "operation not supported", you're on a CC-mode GPU
-5. **Is CUDA_VISIBLE_DEVICES set correctly?** Must be a single number like `0`
+2. **Are CUDA libs present?** `ls /usr/lib/libcuda*` — if missing, add manual volume mounts in compose
+3. **Is PTX JIT compiler present?** `ls /usr/lib/libnvidia-ptxjitcompiler*` — required for ZK kernel compilation
+4. **Is LD_LIBRARY_PATH correct?** Must include `/usr/lib` (manual mounts), `/usr/lib64`, `/usr/lib/x86_64-linux-gnu`
+5. **Is dstack base image >= v0.5.6?** Older versions have PTX JIT compatibility issues
+6. **Can sp1-gpu-server start?** Run it manually with `--help` — if "not found", check autoPatchelfHook
+7. **Does gnark-gpu work?** Test with `?prove=gnark-gpu-sync` first (simpler CUDA usage than SP1)
+8. **Does CUDA init fully work?** If sp1-gpu-server fails with "operation not supported" after manual mounts are confirmed, that's a genuine CC-mode limitation for SP1 specifically
+9. **Is CUDA_VISIBLE_DEVICES set correctly?** SP1 needs a single number like `0`; gnark uses `NVIDIA_VISIBLE_DEVICES: all`
+
+---
+
+## Deployment Log
+
+Tracks what was deployed, when, and what changed.
+
+### How to Verify
+
+1. **Image digest**: `docker inspect --format='{{index .RepoDigests 0}}' <image>`
+2. **Compose hash**: `sha256sum docker-compose.phala.yml`
+3. **CVM attestation**: `curl <app-url>/info?attest=true` — verify RTMR3 matches expected measurements
+
+### 2026-03-04 — GPU Fix: Manual CUDA Lib Mounts + dstack v0.5.6
+
+- **Compose**: `docker-compose.phala.yml`
+- **CVM**: `17473f941e79464abafbf2883eda9e29` (gpu-use2, US-EAST-1)
+- **Root cause**: nvidia-container-runtime silently failed to inject CUDA libs into Nix image (no FHS paths). Misdiagnosed as CC-mode blocking CUDA.
+- **Fix** (from Phala devrel):
+  - Manual volume mounts for `libcuda.so`, `libnvidia-pkcs11*.so`, `libnvidia-ptxjitcompiler.so`
+  - dstack base image upgraded to v0.5.6 (PTX JIT compiler compatibility)
+  - Added `/usr/lib` to `LD_LIBRARY_PATH`
+- **Result**: gnark-gpu proving now works in CC-mode TEE (~3-5s e2e)
+
+### 2026-03-03 — DevProof Stage 1 Hardening
+
+- **Image**: `ghcr.io/reliqlabs/oauth3:feat-contract-5bb39c9`
+- **Compose**: `docker-compose.phala.yml`
+- **CVM**: `17473f941e79464abafbf2883eda9e29` (gpu-use2, US-EAST-1)
+- **Changes**:
+  - Hardcoded OAuth provider endpoints (ISSUER, API_BASE_URL, TYPE, MODE, SCOPES) in compose — prevents operator redirect attacks
+  - Pinned Docker image tag in compose (was `${DOCKER_IMAGE}` env var)
+  - Cookie key derived from dstack KMS via `DeriveKey("oauth3/cookie-key")` — operator can no longer supply a known key
+  - Removed `COOKIE_KEY_BASE64` from compose and `.env.phala`
+
+### 2026-02-28 — gnark Long-Lived Server Mode
+
+- **Image**: `ghcr.io/reliqlabs/oauth3:feat-contract-5bb39c9`
+- **Compose**: `docker-compose.phala.yml`
+- **Changes**:
+  - Converted gnark prove binary from one-shot CLI to long-lived HTTP server
+  - Added Content-Length header to gnark server response (avoid chunked encoding)
+  - Separate gnark-cpu and gnark-gpu binaries (icicle build tag)

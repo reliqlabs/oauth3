@@ -2,11 +2,10 @@ use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 
 use futures::FutureExt;
-use serde_json::json;
-
 use crate::app::AppState;
 use crate::attestation::DstackClient;
 use crate::models::prove_job::{ProveJob, ProverType};
+use crate::web::prove_utils::build_proof_json;
 
 pub fn spawn_prove_worker(state: AppState) {
     tokio::spawn(async move {
@@ -119,28 +118,7 @@ async fn process_job(state: &AppState, mut job: ProveJob) {
     tracing::info!(job_id = %job.id, prover_type = %job.prover_type, "starting prove pipeline...");
     match zkdcap_host::prove_quote(&quote_bytes, &backend).await {
         Ok(proof_output) => {
-            // Include the full proof (pi_a/b/c + optional commitment fields)
-            let mut proof_value = json!({
-                "pi_a": proof_output.proof["pi_a"],
-                "pi_b": proof_output.proof["pi_b"],
-                "pi_c": proof_output.proof["pi_c"],
-                "protocol": proof_output.proof["protocol"],
-                "curve": proof_output.proof["curve"],
-                "public_inputs": proof_output.public_inputs,
-                "journal": proof_output.journal,
-                "zkvm": proof_output.zkvm,
-            });
-            // SP1 v6 Keccak commitment fields (if present)
-            if let Some(c) = proof_output.proof.get("commitment") {
-                proof_value["commitment"] = c.clone();
-            }
-            if let Some(p) = proof_output.proof.get("commitment_pok") {
-                proof_value["commitment_pok"] = p.clone();
-            }
-            // gnark public_inputs (if present — nested object from gnark witness)
-            if let Some(pi) = proof_output.proof.get("public_inputs") {
-                proof_value["public_inputs"] = pi.clone();
-            }
+            let proof_value = build_proof_json(&proof_output);
             job.status = "completed".to_string();
             job.proof_json = Some(proof_value.to_string());
             job.updated_at = now();

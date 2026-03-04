@@ -23,6 +23,7 @@ pub enum ProverType {
     Sp1Network,
     GnarkCpu,
     GnarkGpu,
+    GnarkGpuSync,
 }
 
 impl ProverType {
@@ -38,6 +39,7 @@ impl ProverType {
             "sp1-network" => Some(Self::Sp1Network),
             "gnark" | "gnark-cpu" => Some(Self::GnarkCpu),
             "gnark-gpu" => Some(Self::GnarkGpu),
+            "gnark-gpu-sync" => Some(Self::GnarkGpuSync),
             _ => None,
         }
     }
@@ -50,7 +52,13 @@ impl ProverType {
             Self::Sp1Network => "sp1-network",
             Self::GnarkCpu => "gnark-cpu",
             Self::GnarkGpu => "gnark-gpu",
+            Self::GnarkGpuSync => "gnark-gpu-sync",
         }
+    }
+
+    /// Returns true if this prover type should be handled synchronously (inline response).
+    pub fn is_sync(&self) -> bool {
+        matches!(self, Self::GnarkGpuSync)
     }
 
     /// Parse from DB string.
@@ -61,6 +69,7 @@ impl ProverType {
             "sp1-network" => Some(Self::Sp1Network),
             "gnark-cpu" => Some(Self::GnarkCpu),
             "gnark-gpu" => Some(Self::GnarkGpu),
+            "gnark-gpu-sync" => Some(Self::GnarkGpuSync),
             _ => None,
         }
     }

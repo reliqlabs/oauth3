@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use crate::app::AppState;
 use crate::attestation::DstackClient;
 use crate::models::prove_job::{ProveJob, ProverType};
+use crate::web::prove_utils::build_proof_json;
 
 pub async fn prove_middleware(
     State(state): State<AppState>,
@@ -59,6 +60,12 @@ pub async fn prove_middleware(
         })?
         .to_bytes();
 
+    // Sync proving path — block and return inline response
+    if prover_type.is_sync() {
+        return prove_sync(prover_type, &bytes).await;
+    }
+
+    // Async job queue path
     let job_id = uuid::Uuid::new_v4().to_string();
     let now = time::OffsetDateTime::now_utc().to_string();
 
@@ -94,6 +101,68 @@ pub async fn prove_middleware(
 
     Ok(Response::builder()
         .status(StatusCode::ACCEPTED)
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap())
+}
+
+/// Synchronous prove path: get TDX quote, generate proof, return inline.
+async fn prove_sync(
+    prover_type: ProverType,
+    response_body: &[u8],
+) -> Result<Response, StatusCode> {
+    tracing::info!(prover_type = prover_type.as_str(), "sync prove: fetching TDX quote...");
+
+    let client = DstackClient::new();
+    let quote = client.get_quote(response_body).await.map_err(|e| {
+        tracing::error!(error = ?e, "sync prove: failed to get attestation quote");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let quote_bytes = hex::decode(&quote.quote).map_err(|e| {
+        tracing::error!(error = ?e, "sync prove: failed to decode hex quote");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    tracing::info!(quote_len = quote_bytes.len(), "sync prove: TDX quote obtained, starting proof...");
+
+    let backend = match prover_type {
+        ProverType::GnarkGpuSync => {
+            let socket = std::env::var("GNARK_GPU_SOCKET")
+                .unwrap_or_else(|_| "/tmp/gnark-prove-gpu.sock".into());
+            zkdcap_host::ProverBackend::Gnark { socket_path: socket, gpu: true }
+        }
+        // Fallback (shouldn't reach here due to is_sync() gate)
+        _ => unreachable!("prove_sync called with non-sync prover type"),
+    };
+
+    let proof_output = zkdcap_host::prove_quote(&quote_bytes, &backend).await.map_err(|e| {
+        tracing::error!(error = ?e, "sync prove: proof generation failed");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    tracing::info!(prover_type = prover_type.as_str(), "sync prove: completed");
+
+    let original_json: Value = serde_json::from_slice(response_body).map_err(|e| {
+        tracing::error!(error = ?e, "sync prove: failed to parse response body as JSON");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let proof_value = build_proof_json(&proof_output);
+
+    let resp = json!({
+        "data": original_json,
+        "proof": proof_value,
+        "prover_type": prover_type.as_str(),
+    });
+
+    let body = serde_json::to_vec(&resp).map_err(|e| {
+        tracing::error!(error = ?e, "sync prove: failed to serialize response");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
         .header("content-type", "application/json")
         .body(Body::from(body))
         .unwrap())
