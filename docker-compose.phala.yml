@@ -42,7 +42,7 @@ services:
       - /usr/lib/libnvidia-ptxjitcompiler.so.570.172.08:/usr/lib/libnvidia-ptxjitcompiler.so.570.172.08:ro
       - /usr/lib/libnvidia-ptxjitcompiler.so.570.172.08:/usr/lib/libnvidia-ptxjitcompiler.so.1:ro
     environment:
-      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/oauth3
+      DATABASE_URL: ${DATABASE_URL}
       APP_BIND_ADDR: ${APP_BIND_ADDR:-0.0.0.0:8080}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL}
       RUST_LOG: ${RUST_LOG:-info,oauth3=info}
@@ -61,6 +61,10 @@ services:
       PROVIDER_GOOGLE_ISSUER: https://accounts.google.com
       PROVIDER_GOOGLE_SCOPES: "openid email profile"
       PROVIDER_GOOGLE_API_BASE_URL: https://www.googleapis.com
+      # Registry credentials (consumed by Phala pre-launch script for docker login)
+      DSTACK_DOCKER_REGISTRY: ${DSTACK_DOCKER_REGISTRY:-}
+      DSTACK_DOCKER_USERNAME: ${DSTACK_DOCKER_USERNAME:-}
+      DSTACK_DOCKER_PASSWORD: ${DSTACK_DOCKER_PASSWORD:-}
       # Append /usr/lib for manually mounted CUDA libs (image already has /usr/lib64:/usr/lib/x86_64-linux-gnu)
       LD_LIBRARY_PATH: /usr/lib64:/usr/lib/x86_64-linux-gnu:/usr/lib
     ports:

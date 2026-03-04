@@ -360,6 +360,8 @@
             curl
             # glibc + libstdc++ needed at runtime for sp1-gpu-server (patched by autoPatchelfHook)
             stdenv.cc.cc.lib
+            # libpq needs /etc/passwd to resolve UID 0 → username
+            fakeNss
           ];
 
           # nvidia-container-toolkit bind-mounts CUDA libs + binaries into these paths.

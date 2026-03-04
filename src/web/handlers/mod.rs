@@ -5,3 +5,4 @@ pub mod attestation;
 pub mod oauth;
 pub mod apps;
 pub mod prove;
+pub mod verify;
