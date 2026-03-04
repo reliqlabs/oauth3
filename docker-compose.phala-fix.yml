@@ -33,14 +33,13 @@ services:
     volumes:
       # Mount dstack socket for TEE operations
       - /var/run/dstack.sock:/var/run/dstack.sock
-      # Manual CUDA lib mounts — nvidia-container-runtime silently fails on Nix images (no FHS).
-      # These are from the dstack VM host. Driver version must match the dstack base image.
       - /usr/lib/libcuda.so.570.172.08:/usr/lib/libcuda.so.570.172.08:ro
       - /usr/lib/libcuda.so.570.172.08:/usr/lib/libcuda.so.1:ro
       - /usr/lib/libnvidia-pkcs11.so.570.172.08:/usr/lib/libnvidia-pkcs11.so.570.172.08:ro
       - /usr/lib/libnvidia-pkcs11-openssl3.so.570.172.08:/usr/lib/libnvidia-pkcs11-openssl3.so.570.172.08:ro
       - /usr/lib/libnvidia-ptxjitcompiler.so.570.172.08:/usr/lib/libnvidia-ptxjitcompiler.so.570.172.08:ro
       - /usr/lib/libnvidia-ptxjitcompiler.so.570.172.08:/usr/lib/libnvidia-ptxjitcompiler.so.1:ro
+      # Do NOT mount nvidia libs manually — nvidia-container-runtime handles this
     environment:
       DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/oauth3
       APP_BIND_ADDR: ${APP_BIND_ADDR:-0.0.0.0:8080}
@@ -61,8 +60,7 @@ services:
       PROVIDER_GOOGLE_ISSUER: https://accounts.google.com
       PROVIDER_GOOGLE_SCOPES: "openid email profile"
       PROVIDER_GOOGLE_API_BASE_URL: https://www.googleapis.com
-      # Append /usr/lib for manually mounted CUDA libs (image already has /usr/lib64:/usr/lib/x86_64-linux-gnu)
-      LD_LIBRARY_PATH: /usr/lib64:/usr/lib/x86_64-linux-gnu:/usr/lib
+      LD_LIBRARY_PATH: /nix/store/2fxp204b9jh1s3lpggdlnws44vvzw1w9-openssl-3.4.3/lib:/usr/lib
     ports:
       - "8080:8080"
 
