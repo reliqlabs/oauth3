@@ -36,10 +36,27 @@ pub async fn run() -> anyhow::Result<()> {
         "✓ Configuration loaded"
     );
 
-    // Prepare cookie key
-    let key_bytes = decode_cookie_key(&config.server.cookie_key_base64)?;
+    // Prepare cookie key — derive from dstack KMS in TEE mode, fall back to env/random
+    let key_bytes = if std::env::var("DSTACK_SOCKET").is_ok() {
+        tracing::info!("DSTACK_SOCKET detected, deriving cookie key from KMS...");
+        let client = crate::attestation::DstackClient::new();
+        let derived = client.derive_key("oauth3/cookie-key").await
+            .map_err(|e| anyhow::anyhow!("Failed to derive cookie key from KMS: {}", e))?;
+        let raw = hex::decode(&derived.key)
+            .map_err(|e| anyhow::anyhow!("KMS returned invalid hex key: {}", e))?;
+        if raw.len() < 64 {
+            return Err(anyhow::anyhow!(
+                "KMS derived key too short: {} bytes, need >= 64", raw.len()
+            ));
+        }
+        let mut out = [0u8; 64];
+        out.copy_from_slice(&raw[..64]);
+        tracing::info!("Cookie key derived from dstack KMS (TEE-bound, operator cannot access)");
+        out
+    } else {
+        decode_cookie_key(&config.server.cookie_key_base64)?
+    };
     let cookie_key = Key::from(&key_bytes);
-    tracing::info!("🔐 Cookie key loaded and validated");
 
     // Initialize DB pool and run migrations when applicable
     #[cfg(feature = "sqlite")]

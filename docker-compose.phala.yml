@@ -15,7 +15,7 @@ services:
       - pgdata:/var/lib/postgresql/data
 
   app:
-    image: ${DOCKER_IMAGE}
+    image: ghcr.io/reliqlabs/oauth3:feat-contract-5bb39c9
     restart: unless-stopped
     # nvidia-container-runtime is registered in dstack-nvidia-dev guest VM
     # It auto-injects /dev/nvidia* devices and CUDA libs when NVIDIA_VISIBLE_DEVICES is set
@@ -38,7 +38,6 @@ services:
       DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/oauth3
       APP_BIND_ADDR: ${APP_BIND_ADDR:-0.0.0.0:8080}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL}
-      COOKIE_KEY_BASE64: ${COOKIE_KEY_BASE64}
       RUST_LOG: ${RUST_LOG:-info,oauth3=info}
       DSTACK_SOCKET: /var/run/dstack.sock
       # SP1 proving mode: cpu (default), cuda (GPU), or network (Succinct prover network)
@@ -47,14 +46,14 @@ services:
       # Tells nvidia-container-runtime which GPUs and capabilities to expose
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
-      # Google OAuth provider
-      PROVIDER_GOOGLE_TYPE: ${PROVIDER_GOOGLE_TYPE}
-      PROVIDER_GOOGLE_MODE: ${PROVIDER_GOOGLE_MODE}
+      # Google OAuth provider — endpoints hardcoded to prevent operator redirect attacks
+      PROVIDER_GOOGLE_TYPE: oidc
+      PROVIDER_GOOGLE_MODE: live
       PROVIDER_GOOGLE_CLIENT_ID: ${PROVIDER_GOOGLE_CLIENT_ID}
       PROVIDER_GOOGLE_CLIENT_SECRET: ${PROVIDER_GOOGLE_CLIENT_SECRET}
-      PROVIDER_GOOGLE_ISSUER: ${PROVIDER_GOOGLE_ISSUER}
-      PROVIDER_GOOGLE_SCOPES: ${PROVIDER_GOOGLE_SCOPES}
-      PROVIDER_GOOGLE_API_BASE_URL: ${PROVIDER_GOOGLE_API_BASE_URL}
+      PROVIDER_GOOGLE_ISSUER: https://accounts.google.com
+      PROVIDER_GOOGLE_SCOPES: "openid email profile"
+      PROVIDER_GOOGLE_API_BASE_URL: https://www.googleapis.com
     ports:
       - "8080:8080"
 

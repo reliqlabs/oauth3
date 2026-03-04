@@ -8,7 +8,8 @@ pub struct ServerCfg {
     pub bind_addr: String,
     #[serde(default = "default_public_url")]
     pub public_url: String,
-    /// Base64-encoded 32-byte key used to sign/encrypt cookies
+    /// Base64-encoded 32 or 64-byte key used to sign/encrypt cookies.
+    /// In TEE mode (DSTACK_SOCKET set), this is ignored — key is derived from KMS.
     pub cookie_key_base64: String,
 }
 
