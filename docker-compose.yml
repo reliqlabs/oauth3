@@ -25,9 +25,7 @@ services:
       - "8090:8090"
 
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: oauth3:nix
     restart: unless-stopped
     volumes:
       - dstack-socket:/var/run

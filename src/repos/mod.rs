@@ -9,6 +9,7 @@ use crate::models::{
     consent::UserConsent,
     oauth_code::OAuthCode,
     app_token::{AppAccessToken, AppRefreshToken},
+    prove_job::ProveJob,
 };
 
 #[async_trait]
@@ -65,6 +66,13 @@ pub trait AccountsRepo: Send + Sync {
     async fn create_app_refresh_token(&self, token: AppRefreshToken) -> anyhow::Result<()>;
     async fn get_app_refresh_token_by_hash(&self, token_hash: &str) -> anyhow::Result<Option<AppRefreshToken>>;
     async fn revoke_app_refresh_token(&self, id: &str, replaced_by_id: Option<&str>) -> anyhow::Result<()>;
+
+    // Prove jobs
+    async fn create_prove_job(&self, job: ProveJob) -> anyhow::Result<()>;
+    async fn get_prove_job(&self, id: &str) -> anyhow::Result<Option<ProveJob>>;
+    async fn update_prove_job(&self, job: &ProveJob) -> anyhow::Result<()>;
+    async fn claim_next_prove_job(&self) -> anyhow::Result<Option<ProveJob>>;
+    async fn reset_running_prove_jobs(&self) -> anyhow::Result<u64>;
 }
 
 #[cfg(feature = "pg")]

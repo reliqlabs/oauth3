@@ -1,0 +1,19 @@
+{
+  "name": "oauth3",
+  "version": "1.0.0",
+  "description": "Rust web service that provides OAuth/OIDC authentication and proxies authenticated requests to provider APIs (Google, GitHub, etc.) with optional TEE (Trusted Execution Environment) attestation. Built with Axum, Diesel (async Postgres/blocking SQLite), and designed for deployment on Phala Cloud's TDX infrastructure.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "snarkjs": "^0.7.6"
+  }
+}

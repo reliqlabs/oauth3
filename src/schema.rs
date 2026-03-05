@@ -66,6 +66,21 @@ diesel::table! {
 }
 
 diesel::table! {
+    prove_jobs (id) {
+        id -> Text,
+        status -> Text,
+        request_uri -> Text,
+        response_body -> Binary,
+        quote_hex -> Nullable<Text>,
+        proof_json -> Nullable<Text>,
+        error_message -> Nullable<Text>,
+        created_at -> Text,
+        updated_at -> Text,
+        prover_type -> Text,
+    }
+}
+
+diesel::table! {
     oauth_codes (code_hash) {
         code_hash -> Text,
         app_id -> Text,
@@ -159,6 +174,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     applications,
     oauth_codes,
     oauth_providers,
+    prove_jobs,
     user_consents,
     user_identities,
     users,

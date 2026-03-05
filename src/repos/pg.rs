@@ -4,7 +4,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use diesel::prelude::*;
 use diesel::OptionalExtension;
-use diesel_async::{AsyncPgConnection, RunQueryDsl, AsyncConnection};
+use diesel_async::{RunQueryDsl, AsyncConnection};
 
 use crate::models::{
     identity::NewIdentity,
@@ -16,6 +16,7 @@ use crate::models::{
     consent::UserConsent,
     oauth_code::OAuthCode,
     app_token::{AppAccessToken, AppRefreshToken},
+    prove_job::ProveJob,
 };
 use crate::repos::AccountsRepo;
 use crate::schema::{
@@ -29,6 +30,7 @@ use crate::schema::{
     oauth_codes,
     app_access_tokens,
     app_refresh_tokens,
+    prove_jobs,
 };
 
 pub struct PgAccountsRepo {
@@ -488,5 +490,84 @@ impl AccountsRepo for PgAccountsRepo {
             .execute(&mut conn)
             .await?;
         Ok(())
+    }
+
+    async fn create_prove_job(&self, job: ProveJob) -> anyhow::Result<()> {
+        let mut conn = self.pool.get().await?;
+        diesel::insert_into(prove_jobs::table)
+            .values(&job)
+            .execute(&mut conn)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_prove_job(&self, id: &str) -> anyhow::Result<Option<ProveJob>> {
+        let mut conn = self.pool.get().await?;
+        let row = prove_jobs::table
+            .find(id)
+            .first::<ProveJob>(&mut conn)
+            .await
+            .optional()?;
+        Ok(row)
+    }
+
+    async fn update_prove_job(&self, job: &ProveJob) -> anyhow::Result<()> {
+        let mut conn = self.pool.get().await?;
+        diesel::update(prove_jobs::table.find(&job.id))
+            .set(job)
+            .execute(&mut conn)
+            .await?;
+        Ok(())
+    }
+
+    async fn claim_next_prove_job(&self) -> anyhow::Result<Option<ProveJob>> {
+        use prove_jobs::dsl as pj;
+        let now = time::OffsetDateTime::now_utc().to_string();
+        let mut conn = self.pool.get().await?;
+        let row = conn
+            .transaction::<Option<ProveJob>, diesel::result::Error, _>(|conn| {
+                let now = now.clone();
+                Box::pin(async move {
+                    let job = pj::prove_jobs
+                        .filter(pj::status.eq("pending"))
+                        .order(pj::created_at.asc())
+                        .first::<ProveJob>(conn)
+                        .await
+                        .optional()?;
+                    if let Some(mut job) = job {
+                        diesel::update(pj::prove_jobs.find(&job.id))
+                            .set((
+                                pj::status.eq("running"),
+                                pj::updated_at.eq(&now),
+                            ))
+                            .execute(conn)
+                            .await?;
+                        job.status = "running".to_string();
+                        job.updated_at = now;
+                        Ok(Some(job))
+                    } else {
+                        Ok(None)
+                    }
+                })
+            })
+            .await
+            .context("pg claim_next_prove_job tx failed")?;
+        Ok(row)
+    }
+
+    async fn reset_running_prove_jobs(&self) -> anyhow::Result<u64> {
+        use prove_jobs::dsl as pj;
+        let mut conn = self.pool.get().await?;
+        let now = time::OffsetDateTime::now_utc().to_string();
+        let n = diesel::update(
+            pj::prove_jobs.filter(pj::status.eq("running"))
+        )
+        .set((
+            pj::status.eq("pending"),
+            pj::updated_at.eq(&now),
+        ))
+        .execute(&mut conn)
+        .await?;
+        Ok(n as u64)
     }
 }

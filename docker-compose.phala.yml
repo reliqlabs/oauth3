@@ -15,33 +15,58 @@ services:
       - pgdata:/var/lib/postgresql/data
 
   app:
-    image: ${DOCKER_IMAGE}
+    image: ghcr.io/reliqlabs/oauth3:feat-contract-5bb39c9
     restart: unless-stopped
+    # nvidia-container-runtime is registered in dstack-nvidia-dev guest VM
+    # It auto-injects /dev/nvidia* devices and CUDA libs when NVIDIA_VISIBLE_DEVICES is set
+    runtime: nvidia
     depends_on:
       db:
         condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility]
     volumes:
       # Mount dstack socket for TEE operations
       - /var/run/dstack.sock:/var/run/dstack.sock
+      # Manual CUDA lib mounts — nvidia-container-runtime silently fails on Nix images (no FHS).
+      # These are from the dstack VM host. Driver version must match the dstack base image.
+      - /usr/lib/libcuda.so.570.172.08:/usr/lib/libcuda.so.570.172.08:ro
+      - /usr/lib/libcuda.so.570.172.08:/usr/lib/libcuda.so.1:ro
+      - /usr/lib/libnvidia-pkcs11.so.570.172.08:/usr/lib/libnvidia-pkcs11.so.570.172.08:ro
+      - /usr/lib/libnvidia-pkcs11-openssl3.so.570.172.08:/usr/lib/libnvidia-pkcs11-openssl3.so.570.172.08:ro
+      - /usr/lib/libnvidia-ptxjitcompiler.so.570.172.08:/usr/lib/libnvidia-ptxjitcompiler.so.570.172.08:ro
+      - /usr/lib/libnvidia-ptxjitcompiler.so.570.172.08:/usr/lib/libnvidia-ptxjitcompiler.so.1:ro
     environment:
       DATABASE_URL: ${DATABASE_URL}
       APP_BIND_ADDR: ${APP_BIND_ADDR:-0.0.0.0:8080}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL}
-      COOKIE_KEY_BASE64: ${COOKIE_KEY_BASE64}
       RUST_LOG: ${RUST_LOG:-info,oauth3=info}
       DSTACK_SOCKET: /var/run/dstack.sock
-      # Google OAuth provider
-      PROVIDER_GOOGLE_TYPE: ${PROVIDER_GOOGLE_TYPE}
-      PROVIDER_GOOGLE_MODE: ${PROVIDER_GOOGLE_MODE}
+      # SP1 proving mode: cpu (default), cuda (GPU), or network (Succinct prover network)
+      SP1_PROVER: ${SP1_PROVER:-cpu}
+      NETWORK_PRIVATE_KEY: ${NETWORK_PRIVATE_KEY:-}
+      # Tells nvidia-container-runtime which GPUs and capabilities to expose
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      # Google OAuth provider — endpoints hardcoded to prevent operator redirect attacks
+      PROVIDER_GOOGLE_TYPE: oidc
+      PROVIDER_GOOGLE_MODE: live
       PROVIDER_GOOGLE_CLIENT_ID: ${PROVIDER_GOOGLE_CLIENT_ID}
       PROVIDER_GOOGLE_CLIENT_SECRET: ${PROVIDER_GOOGLE_CLIENT_SECRET}
-      PROVIDER_GOOGLE_ISSUER: ${PROVIDER_GOOGLE_ISSUER}
-      PROVIDER_GOOGLE_SCOPES: ${PROVIDER_GOOGLE_SCOPES}
-      PROVIDER_GOOGLE_API_BASE_URL: ${PROVIDER_GOOGLE_API_BASE_URL}
+      PROVIDER_GOOGLE_ISSUER: https://accounts.google.com
+      PROVIDER_GOOGLE_SCOPES: "openid email profile"
+      PROVIDER_GOOGLE_API_BASE_URL: https://www.googleapis.com
       # Registry credentials (consumed by Phala pre-launch script for docker login)
       DSTACK_DOCKER_REGISTRY: ${DSTACK_DOCKER_REGISTRY:-}
       DSTACK_DOCKER_USERNAME: ${DSTACK_DOCKER_USERNAME:-}
       DSTACK_DOCKER_PASSWORD: ${DSTACK_DOCKER_PASSWORD:-}
+      # Append /usr/lib for manually mounted CUDA libs (image already has /usr/lib64:/usr/lib/x86_64-linux-gnu)
+      LD_LIBRARY_PATH: /usr/lib64:/usr/lib/x86_64-linux-gnu:/usr/lib
     ports:
       - "8080:8080"
 

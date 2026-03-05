@@ -36,10 +36,27 @@ pub async fn run() -> anyhow::Result<()> {
         "✓ Configuration loaded"
     );
 
-    // Prepare cookie key
-    let key_bytes = decode_cookie_key(&config.server.cookie_key_base64)?;
+    // Prepare cookie key — derive from dstack KMS in TEE mode, fall back to env/random
+    let key_bytes = if std::env::var("DSTACK_SOCKET").is_ok() {
+        tracing::info!("DSTACK_SOCKET detected, deriving cookie key from KMS...");
+        let client = crate::attestation::DstackClient::new();
+        let derived = client.derive_key("oauth3/cookie-key").await
+            .map_err(|e| anyhow::anyhow!("Failed to derive cookie key from KMS: {}", e))?;
+        let raw = hex::decode(&derived.key)
+            .map_err(|e| anyhow::anyhow!("KMS returned invalid hex key: {}", e))?;
+        if raw.len() < 64 {
+            return Err(anyhow::anyhow!(
+                "KMS derived key too short: {} bytes, need >= 64", raw.len()
+            ));
+        }
+        let mut out = [0u8; 64];
+        out.copy_from_slice(&raw[..64]);
+        tracing::info!("Cookie key derived from dstack KMS (TEE-bound, operator cannot access)");
+        out
+    } else {
+        decode_cookie_key(&config.server.cookie_key_base64)?
+    };
     let cookie_key = Key::from(&key_bytes);
-    tracing::info!("🔐 Cookie key loaded and validated");
 
     // Initialize DB pool and run migrations when applicable
     #[cfg(feature = "sqlite")]
@@ -92,7 +109,10 @@ pub async fn run() -> anyhow::Result<()> {
     }
 
     tracing::info!("🛣️  Building router with {} routes", 9);
-    let app = build_router(state);
+    let app = build_router(state.clone());
+
+    // Spawn background prove worker
+    crate::web::prove_worker::spawn_prove_worker(state);
 
     let addr = config.server.bind_addr.clone();
     tracing::info!("🌐 Server listening on {}", addr);
@@ -221,8 +241,10 @@ pub fn build_router(state: AppState) -> Router {
         // OAuth proxy endpoint - forwards authenticated requests to provider APIs
         .route("/proxy/{provider}/{*path}",
             axum::routing::any(crate::web::proxy::proxy_request))
+        .route("/prove/{job_id}", get(crate::web::handlers::prove::get_prove_status))
         .nest_service("/static", ServeDir::new("static"))
-        .with_state(state)
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(state, crate::web::middleware::prove_middleware))
         .layer(middleware::from_fn(crate::web::middleware::attestation_middleware))
         .layer(CookieManagerLayer::new())
         .layer(TraceLayer::new_for_http())

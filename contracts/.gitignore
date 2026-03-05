@@ -1,0 +1,8 @@
+# Build artifacts
+**/target/
+**/artifacts/
+
+# Environment files
+.env
+.env.*
+!.env.example

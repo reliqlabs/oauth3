@@ -41,7 +41,14 @@ lcov.info
 coverage.xml
 cobertura.xml
 
+# Misc build artifacts
+result/
+sqlite::memory:
+
+# Node.js
+node_modules/
+
 # Temporary files
 .tmp/
 *.tmp
-.tmp-* 
+.tmp-*
