@@ -189,6 +189,9 @@
           nativeBuildInputs = [ pkgs.autoPatchelfHook ];
           buildInputs = [ icicleCoreLibs pkgs.stdenv.cc.cc.lib ];
           CGO_LDFLAGS = "-L${icicleCoreLibs}/lib";
+          # Strip preBuild from the go-modules derivation — it creates vendor/
+          # dirs for icicle headers which triggers "vendor folder exists" error.
+          overrideModAttrs = _: { preBuild = ""; };
           preBuild = ''
             # Copy icicle-gnark Go wrapper CGO headers into vendor tree.
             # go mod vendor doesn't copy .h files from include/ subdirectories
