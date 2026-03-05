@@ -196,6 +196,8 @@
             # Copy icicle-gnark Go wrapper CGO headers into vendor tree.
             # go mod vendor doesn't copy .h files from include/ subdirectories
             # because they don't contain .go files.
+            # The vendorHash-fetched vendor dir is read-only; make it writable first.
+            chmod -R u+w vendor
             local vendorBase="vendor/github.com/ingonyama-zk/icicle-gnark/v3/wrappers/golang"
             local srcBase="${icicleGnarkHeaders}/wrappers/golang"
             for reldir in \
