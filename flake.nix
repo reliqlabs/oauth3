@@ -109,10 +109,11 @@
         gnarkSrc = pkgs.lib.cleanSourceWith {
           src = ./circuits/dcap-gnark;
           filter = path: type:
-            (builtins.match ".*\\.go$" path != null) ||
+            (builtins.match ".*/vendor(/.*)?$" path == null) &&
+            ((builtins.match ".*\\.go$" path != null) ||
             (builtins.match ".*/go\\.(mod|sum)$" path != null) ||
             (builtins.match ".*/testdata(/.*)?$" path != null) ||
-            (type == "directory");
+            (type == "directory"));
         };
 
         gnarkBinaries = pkgs.buildGoModule {
