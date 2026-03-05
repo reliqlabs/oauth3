@@ -12,5 +12,8 @@ vk.bin
 proof.json
 result/
 
+# Vendored Go deps (Nix fetches via vendorHash)
+/vendor/
+
 # OS
 .DS_Store

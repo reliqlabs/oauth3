@@ -109,10 +109,9 @@
         gnarkSrc = pkgs.lib.cleanSourceWith {
           src = ./circuits/dcap-gnark;
           filter = path: type:
-            # Include Go source, go.mod/sum, and vendor/
             (builtins.match ".*\\.go$" path != null) ||
             (builtins.match ".*/go\\.(mod|sum)$" path != null) ||
-            (builtins.match ".*/vendor(/.*)?$" path != null) ||
+            (builtins.match ".*/testdata(/.*)?$" path != null) ||
             (type == "directory");
         };
 
@@ -120,7 +119,7 @@
           pname = "gnark-dcap";
           version = "0.1.0";
           src = gnarkSrc;
-          vendorHash = null; # uses committed vendor/
+          vendorHash = "sha256-LJ/KUhZNIQcvA9Vhw8g9BIyXr6Y2iUpQz4wloq+VqgA=";
           subPackages = [ "cmd/prove" "cmd/setup" ];
           # Rename output binaries for clarity
           postInstall = ''
@@ -183,7 +182,7 @@
           pname = "gnark-dcap-icicle";
           version = "0.1.0";
           src = gnarkSrc;
-          vendorHash = null;
+          vendorHash = "sha256-LJ/KUhZNIQcvA9Vhw8g9BIyXr6Y2iUpQz4wloq+VqgA=";
           subPackages = [ "cmd/prove" ];
           tags = [ "icicle" ];
           nativeBuildInputs = [ pkgs.autoPatchelfHook ];
